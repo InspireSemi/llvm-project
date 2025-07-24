@@ -90,3 +90,7 @@ if(LIBOMPTARGET_AMDGPU_ARCH)
 endif()
 
 set(OPENMP_PTHREAD_LIB ${LLVM_PTHREAD_LIB})
+
+################################################################################
+# Looking for INSPIRESEMI THUNDERBIRD...
+################################################################################

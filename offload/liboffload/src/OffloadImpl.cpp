@@ -151,6 +151,8 @@ constexpr ol_platform_backend_t pluginNameToBackend(StringRef Name) {
     return OL_PLATFORM_BACKEND_AMDGPU;
   } else if (Name == "cuda") {
     return OL_PLATFORM_BACKEND_CUDA;
+  } else if (Name == "thunderbird") {
+    return OL_PLATFORM_BACKEND_THUNDERBIRD;
   } else {
     return OL_PLATFORM_BACKEND_UNKNOWN;
   }
@@ -358,10 +360,11 @@ Error olGetDeviceInfoImplDetail(ol_device_handle_t Device,
     return Info.writeString(getInfoString({"Vendor Name"}));
   case OL_DEVICE_INFO_DRIVER_VERSION:
     return Info.writeString(
-        getInfoString({"CUDA Driver Version", "HSA Runtime Version"}));
+        getInfoString({"CUDA Driver Version", "HSA Runtime Version", "Thunderbird Runtime Version"}));
   case OL_DEVICE_INFO_MAX_WORK_GROUP_SIZE:
     return Info.write(getInfoXyz({"Workgroup Max Size per Dimension" /*AMD*/,
-                                  "Maximum Block Dimensions" /*CUDA*/}));
+                                  "Maximum Block Dimensions" /*CUDA*/,
+                                  "Maximum Threads" /*THUNDERBIRD*/}));
   default:
     return createOffloadError(ErrorCode::INVALID_ENUMERATION,
                               "getDeviceInfo enum '%i' is invalid", PropName);
