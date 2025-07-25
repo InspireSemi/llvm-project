@@ -484,7 +484,7 @@ static Error Plugin::check(int32_t Code, const char *ErrMsg, ArgsTy... Args) {
 } // namespace llvm
 
 extern "C" {
-llvm::omp::target::plugin::GenericPluginTy *createPlugin_host() {
+llvm::omp::target::plugin::GenericPluginTy *createPlugin_thunderbird() {
   return new llvm::omp::target::plugin::ThunderbirdPluginTy();
 }
 }
