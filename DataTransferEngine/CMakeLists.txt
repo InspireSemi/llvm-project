@@ -7,6 +7,7 @@ add_library(${TARGET} SHARED
     src/DataTransferEngineReadThunderbird.cpp
     src/DataTransferEngineWriteThunderbirdQEMU.cpp
     src/DataTransferEngineReadThunderbirdQEMU.cpp
+    src/DataTransferEngineThunderbirdQEMUBase.cpp
     src/DataTransferEngineFactory.cpp
 )
 
@@ -20,3 +21,7 @@ install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/include/"
             DESTINATION ${CMAKE_INSTALL_PREFIX}/include
             FILES_MATCHING
             PATTERN "*.hpp")
+
+if(BUILD_TESTING)
+    add_subdirectory(tests)
+endif()
