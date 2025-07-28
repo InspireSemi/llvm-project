@@ -1,32 +1,32 @@
-#!/usr/bin/env bash
+#!/bin/bash
+# shellcheck enable=all
+# shellcheck disable=2250,2312
+
 set -euo pipefail
 IFS=$'\n\t'
 
 usage() {
   cat <<EOF
-Usage: $0 --src <llvm-project-root> --prefix <install-prefix> [options]
-
-Required:
-  --src     Path to llvm-project checkout (must contain llvm/, openmp/, offload/)
-  --prefix  Installation prefix
+Usage: $0 --prefix <install-prefix> [options]
 
 Options:
-  --jobs N          Parallel jobs (default: #cores)
-  --plugin NAME     next-gen plugin token (default: thunderbird)
-  --with-host       also build the 'host' plugin (default: off)
-  --skip-host       skip Phase 1 (LLVM/Clang/LLD)
-  --skip-libomp     skip Phase 2 (libomp)
-  --skip-offload    skip Phase 3 (offload)
-  --lit PATH        path to 'lit' if you want check-* targets enabled
-  --ffi-so PATH     override path to shared libffi.so
-  --ffi-inc DIR     override path to libffi headers
-  --extra-cmake ARG extra CMake arg for Phase 3 (repeatable)
-  -h|--help         this help
+  --src <llvm-project>  Path to llvm-project (must have llvm/ openmp/ offload/)
+  --jobs N              Parallel jobs (default: #cores)
+  --plugin NAME         Next-gen plugin token (default: thunderbird)
+  --with-host           Also build the 'host' plugin (default: off)
+  --skip-host           Skip Phase 1 (LLVM/Clang/LLD)
+  --skip-libomp         Skip Phase 2 (libomp)
+  --skip-offload        Skip Phase 3 (offload)
+  --lit PATH            Path to 'lit' if you want check-* targets enabled
+  --ffi-so PATH         Override path to shared libffi.so
+  --ffi-inc DIR         Override path to libffi headers
+  --cmake-arg ARG       Extra CMake arg for Phase 3 (repeatable)
+  -h|--help             This help
 EOF
 }
 
 # ---- parse args
-SRC_ROOT=""
+SRC_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
 PREFIX=""
 JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu || echo 8)"
 PLUGIN="thunderbird"
@@ -85,7 +85,7 @@ while [[ $# -gt 0 ]]; do
     FFI_INC="$2"
     shift 2
     ;;
-  --extra-cmake)
+  --cmake-arg)
     EXTRA_CMAKE+=("$2")
     shift 2
     ;;
@@ -94,36 +94,36 @@ while [[ $# -gt 0 ]]; do
     exit 0
     ;;
   *)
-    echo "Unknown arg: $1"
-    usage
+    echo "Unknown arg: $1" >&2
+    usage >&2
     exit 1
     ;;
   esac
 done
 
 [[ -n "$SRC_ROOT" && -n "$PREFIX" ]] || {
-  usage
+  usage >&2
   exit 1
-}
+} >&2
 
 need() { command -v "$1" >/dev/null || {
-  echo "Missing '$1'"
+  echo "Missing '$1'" >&2
   exit 1
-}; }
+} }
 need cmake
 need ninja
 
 # ---- validate tree
 [[ -d "$SRC_ROOT/llvm" ]] || {
-  echo "Missing $SRC_ROOT/llvm"
+  echo "Missing $SRC_ROOT/llvm" >&2
   exit 1
 }
 [[ -d "$SRC_ROOT/openmp" ]] || {
-  echo "Missing $SRC_ROOT/openmp"
+  echo "Missing $SRC_ROOT/openmp" >&2
   exit 1
 }
 [[ -d "$SRC_ROOT/offload" ]] || {
-  echo "Missing $SRC_ROOT/offload"
+  echo "Missing $SRC_ROOT/offload" >&2
   exit 1
 }
 
@@ -178,7 +178,7 @@ else
 fi
 
 [[ -f "$LIBOMP_SO" ]] || {
-  echo "FATAL: libomp not found at $LIBOMP_SO"
+  echo "FATAL: libomp not found at $LIBOMP_SO" >&2
   exit 1
 }
 
