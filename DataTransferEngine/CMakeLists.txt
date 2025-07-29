@@ -1,6 +1,6 @@
 set(TARGET DataTransferEngine)
 
-add_library(${TARGET}
+add_library(${TARGET} SHARED
     src/DataTransferEngineWriteXilinx.cpp
     src/DataTransferEngineReadXilinx.cpp
     src/DataTransferEngineWriteThunderbird.cpp
@@ -13,3 +13,10 @@ add_library(${TARGET}
 target_include_directories(${TARGET} PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
+
+install(TARGETS ${TARGET} DESTINATION ${CMAKE_INSTALL_PREFIX/lib})
+
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/include/"
+            DESTINATION ${CMAKE_INSTALL_PREFIX}/include
+            FILES_MATCHING
+            PATTERN "*.hpp")
