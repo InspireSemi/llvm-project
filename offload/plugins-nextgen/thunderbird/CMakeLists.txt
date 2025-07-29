@@ -3,7 +3,16 @@ add_target_library(omptarget.rtl.thunderbird THUNDERBIRD)
 
 target_sources(omptarget.rtl.thunderbird PRIVATE src/rtl.cpp)
 
-# TOOD: add logic to go find the ZephyrSDK
+# TODO: add logic to go find the ZephyrSDK
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/utils/DataTransferEngine")
+  add_subdirectory(utils/DataTransferEngine)
+  target_link_libraries(omptarget.rtl.thunderbird PRIVATE DataTransferEngine)
+  target_include_directories(omptarget.rtl.thunderbird PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/utils/DataTransferEngine)
+else()
+  message(FATAL_ERROR "Cannot find thunderbird/utils/DataTransferEngine libary")
+endif()
 
 # Configure testing for the THUNDERBIRD plugin. We will build tests if we could a
 # functional THUNDERBIRD on the system, or if manually specifies by the user.

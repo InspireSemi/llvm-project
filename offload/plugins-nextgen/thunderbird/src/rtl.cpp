@@ -31,6 +31,9 @@
 #include "llvm/Frontend/OpenMP/OMPGridValues.h"
 #include "llvm/Support/DynamicLibrary.h"
 
+// Thunderbird headers
+#include "DataTransferEngineFactory.hpp"
+
 #if !defined(__BYTE_ORDER__) || !defined(__ORDER_LITTLE_ENDIAN__) ||           \
     !defined(__ORDER_BIG_ENDIAN__)
 #error "Missing preprocessor definitions for endianness detection."
@@ -47,6 +50,8 @@
 
 // The maximum number of physical cores in this plugin.
 #define THUNDERBIRD_MAX_THREADS 6144
+#define THUNDERBIRD_MAX_THREADS_XILINX 4
+#define THUNDERBIRD_MAX_THREADS_QEMU 64
 
 namespace llvm {
 namespace omp {
@@ -88,8 +93,6 @@ struct ThunderbirdKernelTy : public GenericKernelTy {
     KernelEnvironment.Configuration.MayUseNestedParallelism = /*Unknown=*/2;
     KernelEnvironment.Configuration.UseGenericStateMachine = /*Unknown=*/2;
 
-    // Set the maximum number of threads to a single.
-    MaxNumThreads = THUNDERBIRD_MAX_THREADS;
     return Plugin::success();
   }
 
@@ -151,8 +154,59 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
 
   ~ThunderbirdDeviceTy() {}
 
-  /// Initialize the device, which is a no-op
-  Error initImpl(GenericPluginTy &Plugin) override { return Plugin::success(); }
+  /// Initialize the device
+  Error initImpl(GenericPluginTy &Plugin) override {
+    // Inspect the environment to determine what type of device this is targeting
+    char *tDevice = getenv("THUNDERBIRD_DEVICE");
+    if( tDevice != NULL ){
+      std::string tDeviceStr(tDevice);
+      if( tDeviceStr == "XILINX" ){
+        wrChannel = DataTransferEngineFactory::createWriteChannel(
+          DataTransferBackend::Xilinx,
+          XILINXXdmaDevices::H2C0);
+        rdChannel = DataTransferEngineFactory::createReadChannel(
+          DataTransferBackend::Xilinx,
+          XILINXXdmaDevices::C2H0);
+        MaxNumThreads = THUNDERBIRD_MAX_THREADS_XILINX;
+      }else if( tDeviceStr == "QEMU" ){
+        char *tShmDevice = getenv("THUNDERBIRD_QEMU_SHM");
+        if( tShmDevice == NULL ){
+          return Plugin::error(ErrorCode::INVALID_VALUE,
+                               "invalid thunderbird qemu shm target %s",
+                               tShmDevice);
+        }
+        wrChannel = DataTransferEngineFactory::createWriteChannel(
+          DataTransferBackend::ThunderbirdQEMU,
+          std::string(tShmDevice));
+        rdChannel = DataTransferEngineFactory::createReadChannel(
+          DataTransferBackend::ThunderbirdQEMU,
+          std::string(tShmDevice));
+        MaxNumThreads = THUNDERBIRD_MAX_THREADS_QEMU;
+      }else if( tDeviceStr == "THUNDERBIRD" ){
+        wrChannel = DataTransferEngineFactory::createWriteChannel(
+          DataTransferBackend::Thunderbird,
+          "/dev/null");
+        rdChannel = DataTransferEngineFactory::createReadChannel(
+          DataTransferBackend::Thunderbird,
+          "/dev/null");
+        MaxNumThreads = THUNDERBIRD_MAX_THREADS;
+      }else{
+        return Plugin::error(ErrorCode::UNKNOWN,
+                            "invalid device target %s", tDevice);
+      }
+    }else{
+      // Default to the full Thunderbird platform
+      wrChannel = DataTransferEngineFactory::createWriteChannel(
+        DataTransferBackend::Thunderbird,
+        "/dev/null");
+      rdChannel = DataTransferEngineFactory::createReadChannel(
+        DataTransferBackend::Thunderbird,
+        "/dev/null");
+      MaxNumThreads = THUNDERBIRD_MAX_THREADS;
+    }
+
+    return Plugin::success();
+  }
 
   /// Unload the binary image
   ///
@@ -283,18 +337,17 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
   }
 
   /// Submit data to the device (host to device transfer).
-  // TODO: implement the Inspire memcpy API
   Error dataSubmitImpl(void *TgtPtr, const void *HstPtr, int64_t Size,
                        AsyncInfoWrapperTy &AsyncInfoWrapper) override {
-    std::memcpy(TgtPtr, HstPtr, Size);
+
+    wrChannel->transfer((uint64_t)(TgtPtr), HstPtr, (size_t)(Size) );
     return Plugin::success();
   }
 
   /// Retrieve data from the device (device to host transfer).
-  // TODO: implement the Inspire memcpy API
   Error dataRetrieveImpl(void *HstPtr, const void *TgtPtr, int64_t Size,
                          AsyncInfoWrapperTy &AsyncInfoWrapper) override {
-    std::memcpy(HstPtr, TgtPtr, Size);
+    rdChannel->transfer((uint64_t)(TgtPtr), HstPtr, (size_t)(Size) );
     return Plugin::success();
   }
 
@@ -386,6 +439,11 @@ private:
       1, // GV_Max_WG_Size
       1, // GV_Default_WG_Size
   };
+
+  /// Thunderbird write and read channels
+  std::unique_ptr<DataTransferEngineWriteBase> wrChannel;
+  std::unique_ptr<DataTransferEngineReadBase> rdChannel;
+  uint32_t MaxNumThreads = 0;
 };
 
 class ThunderbirdGlobalHandlerTy final : public GenericGlobalHandlerTy {
