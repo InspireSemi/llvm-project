@@ -109,7 +109,7 @@ done
 need() { command -v "$1" >/dev/null || {
   echo "Missing '$1'" >&2
   exit 1
-} }
+}; }
 need cmake
 need ninja
 
@@ -147,6 +147,7 @@ if [[ "$SKIP_HOST" -eq 0 ]]; then
     -DLLVM_TARGETS_TO_BUILD="X86;RISCV"
     -DLLVM_ENABLE_PROJECTS="clang;lld"
     -DCMAKE_INSTALL_PREFIX="$PREFIX"
+    -DCMAKE_PARALLEL_LINK_JOBS=4
   )
   cmake "${CMAKE_PHASE1_ARGS[@]}"
   ninja -C "$PHASE1_BUILD" -j"$JOBS" install

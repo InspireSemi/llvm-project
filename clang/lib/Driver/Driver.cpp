@@ -129,6 +129,38 @@ static std::optional<llvm::Triple> getOffloadTargetTriple(const Driver &D,
   return llvm::Triple(OffloadTargets[0]);
 }
 
+// Infer a device triple for OpenMP when users only pass --offload-arch=thunderbird.
+static std::optional<llvm::Triple>
+getThunderbirdOpenMPOffloadTargetTriple(const Driver &D,
+                                        const ArgList &Args,
+                                        const llvm::Triple &HostTriple) {
+  // If the user did NOT give -fopenmp-targets=..., try to deduce it from --offload-arch.
+  if (!Args.hasArg(options::OPT_offload_EQ)) {
+    auto Archs = Args.getAllArgValues(options::OPT_offload_arch_EQ);
+    // Single-arch or mixed-arch is OK; pick our triple if 'thunderbird' is requested.
+    if (llvm::is_contained(Archs, "thunderbird")) {
+      // Match host pointer width to choose rv32 vs rv64 (mirrors NVIDIA/HIP helpers).
+      return llvm::Triple(HostTriple.isArch64Bit()
+                              ? "riscv64-inspire-elf"
+                              : "riscv32-inspire-elf");
+    }
+    // No inference for other arch names.
+    return std::nullopt;
+  }
+
+  // If -fopenmp-targets was provided, validate and forward it as-is.
+  auto TT = getOffloadTargetTriple(D, Args);
+  if (!TT)
+    return std::nullopt;
+
+  // Accept any RISC-V triple here; the front-end will still enforce OpenMP support.
+  if (TT->isRISCV())
+    return TT;
+
+  D.Diag(diag::err_drv_invalid_or_unsupported_offload_target) << TT->str();
+  return std::nullopt;
+}
+
 static std::optional<llvm::Triple>
 getNVIDIAOffloadTargetTriple(const Driver &D, const ArgList &Args,
                              const llvm::Triple &HostTriple) {
@@ -1089,14 +1121,23 @@ void Driver::CreateOffloadingDeviceToolChains(Compilation &C,
                ((!IsHIP && !IsCuda) || UseLLVMOffload)) {
       llvm::Triple AMDTriple("amdgcn-amd-amdhsa");
       llvm::Triple NVPTXTriple("nvptx64-nvidia-cuda");
+      const bool HostIs64 = C.getDefaultToolChain().getTriple().isArch64Bit();
+      llvm::Triple ThunderbirdTriple(HostIs64
+                                       ? "riscv64-inspire-elf"
+                                       : "riscv32-inspire-elf");
 
+      bool HasThunderbird = false;
       for (StringRef Arch :
            C.getInputArgs().getAllArgValues(options::OPT_offload_arch_EQ)) {
         bool IsNVPTX = IsNVIDIAOffloadArch(
             StringToOffloadArch(getProcessorFromTargetID(NVPTXTriple, Arch)));
         bool IsAMDGPU = IsAMDOffloadArch(
             StringToOffloadArch(getProcessorFromTargetID(AMDTriple, Arch)));
-        if (!IsNVPTX && !IsAMDGPU && !Arch.empty() &&
+        // RISC-V 'thunderbird' arch tag: accept exact match or future "thunderbird+..."
+        bool IsThunderbird = Arch.equals_insensitive("thunderbird") ||
+                           Arch.starts_with_insensitive("thunderbird");
+        HasThunderbird |= IsThunderbird;
+        if (!IsNVPTX && !IsAMDGPU && !IsThunderbird && !Arch.empty() &&
             !Arch.equals_insensitive("native")) {
           Diag(clang::diag::err_drv_failed_to_deduce_target_from_arch) << Arch;
           return;
@@ -1118,6 +1159,24 @@ void Driver::CreateOffloadingDeviceToolChains(Compilation &C,
         }
       }
 
+    // Add a Thunderbird device toolchain if requested.
+    if (HasThunderbird) {
+      auto &TBTC = getOffloadToolChain(C.getInputArgs(), Action::OFK_OpenMP,
+                                       ThunderbirdTriple,
+                                       C.getDefaultToolChain().getTriple());
+      C.addOffloadDeviceToolChain(&TBTC, Action::OFK_OpenMP);
+      // We accept any 'thunderbird' tag; enumerate exactly what the user asked for.
+      llvm::SmallVector<StringRef> TBArchs;
+      for (StringRef A :
+           C.getInputArgs().getAllArgValues(options::OPT_offload_arch_EQ))
+        if (A.equals_insensitive("thunderbird") ||
+            A.starts_with_insensitive("thunderbird"))
+          TBArchs.push_back(A);
+      // If none were collected (defensive), still register a single 'thunderbird'.
+      if (TBArchs.empty())
+        TBArchs.push_back(StringRef("thunderbird"));
+      OffloadArchs[&TBTC] = TBArchs;
+    }
       // If the set is empty then we failed to find a native architecture.
       auto TCRange = C.getOffloadToolChains(Action::OFK_OpenMP);
       if (TCRange.first == TCRange.second)
