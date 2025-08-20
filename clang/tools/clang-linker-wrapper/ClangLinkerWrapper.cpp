@@ -460,6 +460,81 @@ fatbinary(ArrayRef<std::pair<StringRef, StringRef>> InputFiles,
 }
 } // namespace amdgcn
 
+namespace riscv64 {
+// This function is a modified copy of generic::clang.
+Expected<StringRef> link(ArrayRef<StringRef> InputFiles, const ArgList &Args,
+                         uint16_t ActiveOffloadKindMask) {
+  llvm::TimeTraceScope TimeScope("RISCV64 Link");
+  // Use `clang` to invoke the appropriate device tools.
+  Expected<std::string> ClangPath =
+      findProgram("clang", {getMainExecutable("clang")});
+  if (!ClangPath)
+    return ClangPath.takeError();
+
+  const llvm::Triple Triple(Args.getLastArgValue(OPT_triple_EQ));
+  StringRef Arch = Args.getLastArgValue(OPT_arch_EQ);
+  // Create a new file to write the linked device image to.
+  auto TempFileOrErr =
+      createOutputFile(sys::path::filename(ExecutableName) + "." +
+                           Triple.getArchName() + "." + Arch,
+                       "img");
+  if (!TempFileOrErr)
+    return TempFileOrErr.takeError();
+
+  SmallVector<StringRef, 16> CmdArgs{
+      *ClangPath,
+      "--no-default-config",
+      "-o",
+      *TempFileOrErr,
+      Args.MakeArgString("--target=" + Triple.getTriple()),
+  };
+
+  CmdArgs.push_back("-fuse-ld=lld");
+
+  if (!Arch.empty())
+    CmdArgs.push_back(Args.MakeArgString("-march=" + Arch));
+
+  // Forward all of the `--offload-opt` and similar options to the device.
+  for (auto &Arg : Args.filtered(OPT_offload_opt_eq_minus, OPT_mllvm))
+    CmdArgs.append(
+        {"-Xlinker",
+         Args.MakeArgString("--plugin-opt=" + StringRef(Arg->getValue()))});
+
+  CmdArgs.push_back("-Wl,--no-undefined");
+
+  for (StringRef InputFile : InputFiles)
+    CmdArgs.push_back(InputFile);
+
+  // add only the libraries needed for the RISC-V device.
+  if (!Triple.isGPU()) { // This condition is true for riscv64
+    CmdArgs.push_back("-Wl,-Bsymbolic");
+
+    // TODO: Change this to not be manual
+    CmdArgs.push_back("-L/Users/rkabrick/dev/resources/inspiresemi/thunderbird-llvm/thunderbird/devel/build-thunderbird/offload");
+    // TODO: Figure out what the correct way to link this is... either just lomptarget-rtl or the specific name
+    // CmdArgs.push_back("-lomptarget-rtl");
+    CmdArgs.push_back("-l:libomptarget.rtl.thunderbird.a");
+
+  }
+
+  if (SaveTemps && linkerSupportsLTO(Args))
+    CmdArgs.push_back("-Wl,--save-temps");
+
+  if (Args.hasArg(OPT_embed_bitcode))
+    CmdArgs.push_back("-Wl,--lto-emit-llvm");
+
+  for (StringRef Arg : Args.getAllArgValues(OPT_linker_arg_EQ))
+    CmdArgs.append({"-Xlinker", Args.MakeArgString(Arg)});
+  for (StringRef Arg : Args.getAllArgValues(OPT_compiler_arg_EQ))
+    CmdArgs.push_back(Args.MakeArgString(Arg));
+
+  if (Error Err = executeCommands(*ClangPath, CmdArgs))
+    return std::move(Err);
+
+  return *TempFileOrErr;
+}
+} // namespace riscv64
+
 namespace generic {
 Expected<StringRef> clang(ArrayRef<StringRef> InputFiles, const ArgList &Args,
                           uint16_t ActiveOffloadKindMask) {
@@ -593,6 +668,8 @@ Expected<StringRef> linkDevice(ArrayRef<StringRef> InputFiles,
   case Triple::systemz:
   case Triple::loongarch64:
     return generic::clang(InputFiles, Args, ActiveOffloadKindMask);
+  case Triple::riscv64:
+    return riscv64::link(InputFiles, Args, ActiveOffloadKindMask);
   default:
     return createStringError(Triple.getArchName() +
                              " linking is not supported");
