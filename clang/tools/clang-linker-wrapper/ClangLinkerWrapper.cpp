@@ -465,7 +465,6 @@ namespace riscv64 {
 Expected<StringRef> link(ArrayRef<StringRef> InputFiles, const ArgList &Args,
                          uint16_t ActiveOffloadKindMask) {
   llvm::TimeTraceScope TimeScope("RISCV64 Link");
-  // Use `clang` to invoke the appropriate device tools.
   Expected<std::string> ClangPath =
       findProgram("clang", {getMainExecutable("clang")});
   if (!ClangPath)
@@ -487,7 +486,13 @@ Expected<StringRef> link(ArrayRef<StringRef> InputFiles, const ArgList &Args,
       "-o",
       *TempFileOrErr,
       Args.MakeArgString("--target=" + Triple.getTriple()),
-  };
+      // Don’t let the driver inject crt0.o, -lc, or compiler-rt builtins
+      "-nostdlib",
+      "-nodefaultlibs",
+      "-nostartfiles",
+      "-Wl,--gc-sections",
+      "-Wl,--no-undefined",
+   };
 
   CmdArgs.push_back("-fuse-ld=lld");
 
@@ -505,17 +510,11 @@ Expected<StringRef> link(ArrayRef<StringRef> InputFiles, const ArgList &Args,
   for (StringRef InputFile : InputFiles)
     CmdArgs.push_back(InputFile);
 
-  // add only the libraries needed for the RISC-V device.
-  if (!Triple.isGPU()) { // This condition is true for riscv64
-    CmdArgs.push_back("-Wl,-Bsymbolic");
-
-    // TODO: Change this to not be manual
-    CmdArgs.push_back("-L/Users/rkabrick/dev/resources/inspiresemi/thunderbird-llvm/thunderbird/devel/build-thunderbird/offload");
-    // TODO: Figure out what the correct way to link this is... either just lomptarget-rtl or the specific name
-    // CmdArgs.push_back("-lomptarget-rtl");
-    CmdArgs.push_back("-l:libomptarget.rtl.thunderbird.a");
-
-  }
+     if (!Triple.isGPU()) {
+      CmdArgs.push_back("-Wl,-Bsymbolic");
+      CmdArgs.push_back(Args.MakeArgString(
+          "-L" + StringRef("/Users/rkabrick/dev/resources/inspiresemi/thunderbird-llvm/thunderbird/devel/build-thunderbird/offload")));
+   }
 
   if (SaveTemps && linkerSupportsLTO(Args))
     CmdArgs.push_back("-Wl,--save-temps");
