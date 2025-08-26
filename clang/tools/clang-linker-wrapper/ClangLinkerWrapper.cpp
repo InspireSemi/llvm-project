@@ -460,9 +460,8 @@ fatbinary(ArrayRef<std::pair<StringRef, StringRef>> InputFiles,
 }
 } // namespace amdgcn
 
-namespace riscv64 {
-// This function is a modified copy of generic::clang.
-Expected<StringRef> link(ArrayRef<StringRef> InputFiles, const ArgList &Args,
+namespace riscv64{
+   Expected<StringRef> link(ArrayRef<StringRef> InputFiles, const ArgList &Args,
                          uint16_t ActiveOffloadKindMask) {
   llvm::TimeTraceScope TimeScope("RISCV64 Link");
   Expected<std::string> ClangPath =
@@ -492,29 +491,34 @@ Expected<StringRef> link(ArrayRef<StringRef> InputFiles, const ArgList &Args,
       "-nostartfiles",
       "-Wl,--gc-sections",
       "-Wl,--no-undefined",
-   };
+  };
 
   CmdArgs.push_back("-fuse-ld=lld");
 
-  if (!Arch.empty())
-    CmdArgs.push_back(Args.MakeArgString("-march=" + Arch));
+  // Determine whether to pass -march or -mcpu based on the arch string.
+  auto IsRISCVISA = [](StringRef S) {
+    return S.starts_with("rv32") || S.starts_with("rv64");
+  };
+  if (!Arch.empty()) {
+    if (IsRISCVISA(Arch)) {
+      CmdArgs.push_back(Args.MakeArgString("-march=" + Arch));
+    } else if (Arch != "generic" && !Arch.ends_with("-host")) {
+      // Treat non-ISA token as CPU name (e.g., "thunderbird").
+      CmdArgs.push_back(Args.MakeArgString("-mcpu=" + Arch));
+    }
+  }
 
-  // Forward all of the `--offload-opt` and similar options to the device.
+  // Forward plugin/LTO options to the device linker plugin 
   for (auto &Arg : Args.filtered(OPT_offload_opt_eq_minus, OPT_mllvm))
-    CmdArgs.append(
-        {"-Xlinker",
-         Args.MakeArgString("--plugin-opt=" + StringRef(Arg->getValue()))});
-
-  CmdArgs.push_back("-Wl,--no-undefined");
+    CmdArgs.append({"-Xlinker",
+                    Args.MakeArgString("--plugin-opt=" + StringRef(Arg->getValue()))});
 
   for (StringRef InputFile : InputFiles)
     CmdArgs.push_back(InputFile);
 
-     if (!Triple.isGPU()) {
-      CmdArgs.push_back("-Wl,-Bsymbolic");
-      CmdArgs.push_back(Args.MakeArgString(
-          "-L" + StringRef("/Users/rkabrick/dev/resources/inspiresemi/thunderbird-llvm/thunderbird/devel/build-thunderbird/offload")));
-   }
+  if (!Triple.isGPU()) {
+    CmdArgs.push_back("-Wl,-Bsymbolic");
+  }
 
   if (SaveTemps && linkerSupportsLTO(Args))
     CmdArgs.push_back("-Wl,--save-temps");
@@ -532,7 +536,7 @@ Expected<StringRef> link(ArrayRef<StringRef> InputFiles, const ArgList &Args,
 
   return *TempFileOrErr;
 }
-} // namespace riscv64
+}
 
 namespace generic {
 Expected<StringRef> clang(ArrayRef<StringRef> InputFiles, const ArgList &Args,
