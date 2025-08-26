@@ -11,7 +11,7 @@
 ```bash
 export LD_LIBRARY_PATH=$HOME/.local/opt/llvm@thunderbird/lib:$LD_LIBRARY_PATH
 export TBCLANG=$HOME/.local/opt/llvm@thunderbird/bin/clang
-$TBCLANG offload/test/offloading/offloading_success.c -fopenmp --offload-arch=thunderbird -S -o out.s
+$TBCLANG offload/test/offloading/offloading_success.c -fopenmp --offload-arch=thunderbird -o offloading_success 
 ````
 
 ````
