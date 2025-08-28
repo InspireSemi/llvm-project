@@ -129,6 +129,16 @@ static std::optional<llvm::Triple> getOffloadTargetTriple(const Driver &D,
   return llvm::Triple(OffloadTargets[0]);
 }
 
+// Infer a device triple for OpenMP when users only pass --offload-arch=thunderbird.
+// // Infer a device triple for OpenMP when users only pass --offload-arch=thunderbird.
+static llvm::Triple
+getThunderbirdTriple(const llvm::Triple &HostTriple) {
+  // Match host pointer width to choose rv32 vs rv64.
+  return llvm::Triple(HostTriple.isArch64Bit()
+                          ? "riscv64-inspire-elf"
+                          : "riscv32-inspire-elf");
+}
+
 static std::optional<llvm::Triple>
 getNVIDIAOffloadTargetTriple(const Driver &D, const ArgList &Args,
                              const llvm::Triple &HostTriple) {
@@ -1089,14 +1099,28 @@ void Driver::CreateOffloadingDeviceToolChains(Compilation &C,
                ((!IsHIP && !IsCuda) || UseLLVMOffload)) {
       llvm::Triple AMDTriple("amdgcn-amd-amdhsa");
       llvm::Triple NVPTXTriple("nvptx64-nvidia-cuda");
+      const bool HostIs64 = C.getDefaultToolChain().getTriple().isArch64Bit();
+      llvm::Triple ThunderbirdTriple(HostIs64
+                                       ? "riscv64-inspire-elf"
+                                       : "riscv32-inspire-elf");
 
+      bool HasAMDGPU = false;
+      bool HasNVPTX = false;
+      bool HasThunderbird = false;
       for (StringRef Arch :
            C.getInputArgs().getAllArgValues(options::OPT_offload_arch_EQ)) {
         bool IsNVPTX = IsNVIDIAOffloadArch(
             StringToOffloadArch(getProcessorFromTargetID(NVPTXTriple, Arch)));
         bool IsAMDGPU = IsAMDOffloadArch(
             StringToOffloadArch(getProcessorFromTargetID(AMDTriple, Arch)));
-        if (!IsNVPTX && !IsAMDGPU && !Arch.empty() &&
+        // RISC-V 'thunderbird' arch tag: accept exact match or future "thunderbird+..."
+        bool IsThunderbird = Arch.equals_insensitive("thunderbird") ||
+                           Arch.starts_with_insensitive("thunderbird");
+        HasAMDGPU |= IsAMDGPU;
+        HasNVPTX |= IsNVPTX;
+        HasThunderbird |= IsThunderbird;
+
+        if (!IsNVPTX && !IsAMDGPU && !IsThunderbird && !Arch.empty() &&
             !Arch.equals_insensitive("native")) {
           Diag(clang::diag::err_drv_failed_to_deduce_target_from_arch) << Arch;
           return;
@@ -1104,20 +1128,42 @@ void Driver::CreateOffloadingDeviceToolChains(Compilation &C,
       }
 
       // Attempt to deduce the offloading triple from the set of architectures.
-      // We can only correctly deduce NVPTX / AMDGPU triples currently.
-      for (const llvm::Triple &TT : {AMDTriple, NVPTXTriple}) {
-        auto &TC = getOffloadToolChain(C.getInputArgs(), Action::OFK_OpenMP, TT,
-                                       C.getDefaultToolChain().getTriple());
+      if (HasAMDGPU || HasNVPTX) {
+        for (const llvm::Triple &TT : {AMDTriple, NVPTXTriple}) {
+          auto &TC = getOffloadToolChain(C.getInputArgs(), Action::OFK_OpenMP, TT,
+                                        C.getDefaultToolChain().getTriple());
 
-        llvm::SmallVector<StringRef> Archs =
-            getOffloadArchs(C, C.getArgs(), Action::OFK_OpenMP, &TC,
-                            /*SpecificToolchain=*/false);
-        if (!Archs.empty()) {
-          C.addOffloadDeviceToolChain(&TC, Action::OFK_OpenMP);
-          OffloadArchs[&TC] = Archs;
+          llvm::SmallVector<StringRef> Archs =
+              getOffloadArchs(C, C.getArgs(), Action::OFK_OpenMP, &TC,
+                              /*SpecificToolchain=*/false);
+          if (!Archs.empty()) {
+            C.addOffloadDeviceToolChain(&TC, Action::OFK_OpenMP);
+            OffloadArchs[&TC] = Archs;
+          }
         }
       }
 
+            if (HasThunderbird) {
+        // Call the helper function to get the correct triple.
+        const llvm::Triple ThunderbirdTriple =
+            getThunderbirdTriple(C.getDefaultToolChain().getTriple());
+
+        auto &TBTC = getOffloadToolChain(C.getInputArgs(), Action::OFK_OpenMP,
+                                         ThunderbirdTriple,
+                                         C.getDefaultToolChain().getTriple());
+        C.addOffloadDeviceToolChain(&TBTC, Action::OFK_OpenMP);
+        // We accept any 'thunderbird' tag; enumerate exactly what the user asked for.
+        llvm::SmallVector<StringRef> TBArchs;
+        for (StringRef A :
+             C.getInputArgs().getAllArgValues(options::OPT_offload_arch_EQ))
+          if (A.equals_insensitive("thunderbird") ||
+              A.starts_with_insensitive("thunderbird"))
+            TBArchs.push_back(A);
+        // If none were collected (defensive), still register a single 'thunderbird'.
+        if (TBArchs.empty())
+          TBArchs.push_back(StringRef("thunderbird"));
+        OffloadArchs[&TBTC] = TBArchs;
+      }
       // If the set is empty then we failed to find a native architecture.
       auto TCRange = C.getOffloadToolChains(Action::OFK_OpenMP);
       if (TCRange.first == TCRange.second)

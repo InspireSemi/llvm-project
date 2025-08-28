@@ -460,6 +460,84 @@ fatbinary(ArrayRef<std::pair<StringRef, StringRef>> InputFiles,
 }
 } // namespace amdgcn
 
+namespace riscv64{
+   Expected<StringRef> link(ArrayRef<StringRef> InputFiles, const ArgList &Args,
+                         uint16_t ActiveOffloadKindMask) {
+  llvm::TimeTraceScope TimeScope("RISCV64 Link");
+  Expected<std::string> ClangPath =
+      findProgram("clang", {getMainExecutable("clang")});
+  if (!ClangPath)
+    return ClangPath.takeError();
+
+  const llvm::Triple Triple(Args.getLastArgValue(OPT_triple_EQ));
+  StringRef Arch = Args.getLastArgValue(OPT_arch_EQ);
+  // Create a new file to write the linked device image to.
+  auto TempFileOrErr =
+      createOutputFile(sys::path::filename(ExecutableName) + "." +
+                           Triple.getArchName() + "." + Arch,
+                       "img");
+  if (!TempFileOrErr)
+    return TempFileOrErr.takeError();
+
+  SmallVector<StringRef, 16> CmdArgs{
+      *ClangPath,
+      "--no-default-config",
+      "-o",
+      *TempFileOrErr,
+      Args.MakeArgString("--target=" + Triple.getTriple()),
+      // Don’t let the driver inject crt0.o, -lc, or compiler-rt builtins
+      "-nostdlib",
+      "-nodefaultlibs",
+      "-nostartfiles",
+      "-Wl,--gc-sections",
+      "-Wl,--no-undefined",
+  };
+
+  CmdArgs.push_back("-fuse-ld=lld");
+
+  // Determine whether to pass -march or -mcpu based on the arch string.
+  auto IsRISCVISA = [](StringRef S) {
+    return S.starts_with("rv32") || S.starts_with("rv64");
+  };
+  if (!Arch.empty()) {
+    if (IsRISCVISA(Arch)) {
+      CmdArgs.push_back(Args.MakeArgString("-march=" + Arch));
+    } else if (Arch != "generic" && !Arch.ends_with("-host")) {
+      // Treat non-ISA token as CPU name (e.g., "thunderbird").
+      CmdArgs.push_back(Args.MakeArgString("-mcpu=" + Arch));
+    }
+  }
+
+  // Forward plugin/LTO options to the device linker plugin 
+  for (auto &Arg : Args.filtered(OPT_offload_opt_eq_minus, OPT_mllvm))
+    CmdArgs.append({"-Xlinker",
+                    Args.MakeArgString("--plugin-opt=" + StringRef(Arg->getValue()))});
+
+  for (StringRef InputFile : InputFiles)
+    CmdArgs.push_back(InputFile);
+
+  if (!Triple.isGPU()) {
+    CmdArgs.push_back("-Wl,-Bsymbolic");
+  }
+
+  if (SaveTemps && linkerSupportsLTO(Args))
+    CmdArgs.push_back("-Wl,--save-temps");
+
+  if (Args.hasArg(OPT_embed_bitcode))
+    CmdArgs.push_back("-Wl,--lto-emit-llvm");
+
+  for (StringRef Arg : Args.getAllArgValues(OPT_linker_arg_EQ))
+    CmdArgs.append({"-Xlinker", Args.MakeArgString(Arg)});
+  for (StringRef Arg : Args.getAllArgValues(OPT_compiler_arg_EQ))
+    CmdArgs.push_back(Args.MakeArgString(Arg));
+
+  if (Error Err = executeCommands(*ClangPath, CmdArgs))
+    return std::move(Err);
+
+  return *TempFileOrErr;
+}
+}
+
 namespace generic {
 Expected<StringRef> clang(ArrayRef<StringRef> InputFiles, const ArgList &Args,
                           uint16_t ActiveOffloadKindMask) {
@@ -593,6 +671,8 @@ Expected<StringRef> linkDevice(ArrayRef<StringRef> InputFiles,
   case Triple::systemz:
   case Triple::loongarch64:
     return generic::clang(InputFiles, Args, ActiveOffloadKindMask);
+  case Triple::riscv64:
+    return riscv64::link(InputFiles, Args, ActiveOffloadKindMask);
   default:
     return createStringError(Triple.getArchName() +
                              " linking is not supported");
