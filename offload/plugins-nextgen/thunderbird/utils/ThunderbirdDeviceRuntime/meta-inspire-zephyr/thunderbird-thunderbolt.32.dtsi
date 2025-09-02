@@ -1,0 +1,1164 @@
+/dts-v1/;
+
+/ {
+	#address-cells = <0x02>;
+	#size-cells = <0x02>;
+	compatible = "inspire,thunderbird-fpga", "inspire,thunderbird";
+	model = "Inspire Semiconductor Thunderbird FPGA";
+
+	aliases {
+		serial0 = &usart0;
+	};
+
+ 	chosen {
+		bootargs = "debug console=ttyS0,3000000 earlycon=uart,mmio,0x70010100 rodata=off no5lvl root=ram";
+		linux,initrd-start = <0x1100 0x08200000>;
+		linux,initrd-end = <0x1100 0x132b35b6>;
+		rng-seed = <0x4fe9397d 0xb7883060 0xe56ff3c2 0xb05b4e3 0x62e5479c 0xd932a9c8 0x95a47b5b 0x192ef245>;
+		stdout-path = "serial0";
+	};
+
+	sram0: memory@0 {
+		device_type = "memory";
+		reg = <0x00000000 0x00000000 0x00000000 0x02000000>;
+		numa-node-id = <1>;
+	};
+
+	sram2: memory@4000000 {
+		device_type = "memory";
+		reg = <0x00000000 0x04000000 0x00000000 0x02000000>;
+		numa-node-id = <1>;
+	};
+
+	sram4: memory@8000000 {
+		device_type = "memory";
+		reg = <0x00000000 0x08000000 0x00000000 0x02000000>;
+		numa-node-id = <1>;
+	};
+
+	ddrwt: memory@110000000000 {
+		device_type = "memory";
+		reg = <0x00001100 0x00000000 0x00000001 0x00000000>;
+		numa-node-id = <0>;
+	};
+
+	ddrwm: memory@10110000000000 {
+		device_type = "memory";
+		reg = <0x00101100 0x00000000 0x00000001 0x00000000>;
+		numa-node-id = <0>;
+	};
+
+	ddrwb: memory@20110000000000 {
+		device_type = "memory";
+		reg = <0x00201100 0x00000000 0x00000001 0x00000000>;
+		numa-node-id = <0>;
+	};
+
+	ddret: memory@3910000000000 {
+		device_type = "memory";
+		reg = <0x00039100 0x00000000 0x00000001 0x00000000>;
+		numa-node-id = <0>;
+	};
+
+	ddrem: memory@13910000000000 {
+		device_type = "memory";
+		reg = <0x00139100 0x00000000 0x00000001 0x00000000>;
+		numa-node-id = <0>;
+	};
+
+	ddreb: memory@23910000000000 {
+		device_type = "memory";
+		reg = <0x00239100 0x00000000 0x00000001 0x00000000>;
+		numa-node-id = <0>;
+	};
+
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		ivshmem_shm: shm@8200000000000000 {
+			compatible = "inspire,ivshmem-shm";
+			reg = <0x00820000 0x00000000 0x00000000 0x00400000>;
+			/* Optional heap offset for Zephyr to start k_heap */
+			inspire,heap-offset = <0x00010000>;
+			no-map;
+		};
+	};
+
+	cpus {
+		#address-cells = <0x01>;
+		#size-cells = <0x00>;
+		timebase-frequency = <500000000>;
+
+		cpu0: cpu@0 {
+			device_type = "cpu";
+			reg-names = "cpuid", "sram", "corereg";
+			reg = <0x0000 0x00000000 0x20000000>;
+			status = "disabled";
+			compatible = "inspiresemi,riscv-2464", "riscv";
+			riscv,isa = "rv64imafdc";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "zicsr", "zifencei" ;
+			mmu-type = "riscv,sv48";
+			numa-node-id = <1>;
+			#address-cells = <0x02>;
+			#size-cells = <0x02>;
+			cpu0_intc: interrupt-controller {
+				#interrupt-cells = <0x01>;
+				interrupt-controller;
+				status = "disabled";
+				compatible = "riscv,cpu-intc";
+			};
+			clint0: clint@20004000 {
+				interrupts-extended = <&cpu0_intc 0x03 &cpu0_intc 0x07>;
+				reg-names = "irqs", "mtime", "mtimecmp";
+				reg = <0x00 0x20004000 0x00 0x8 0x00 0x2000fff8 0x00 0x8 0x00 0x20008000 0x00 0x8>;
+				status = "disabled";
+				compatible = "riscv,aclint-mswi", "riscv,aclint-mtimer";
+			};
+		};
+		cpu1: cpu@1 {
+			device_type = "cpu";
+			reg-names = "cpuid", "sram", "corereg";
+			reg = <0x0001 0x00010000 0x20010000>;
+			status = "disabled";
+			compatible = "inspiresemi,riscv-2464", "riscv";
+			riscv,isa = "rv64imafdc";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "zicsr", "zifencei" ;
+			mmu-type = "riscv,sv48";
+			numa-node-id = <1>;
+			#address-cells = <0x02>;
+			#size-cells = <0x02>;
+			cpu1_intc: interrupt-controller {
+				#interrupt-cells = <0x01>;
+				interrupt-controller;
+				status = "disabled";
+				compatible = "riscv,cpu-intc";
+			};
+			clint1: clint@20014000 {
+				interrupts-extended = <&cpu1_intc 0x03 &cpu1_intc 0x07>;
+				reg-names = "irqs", "mtime", "mtimecmp";
+				reg = <0x00 0x20014000 0x00 0x8 0x00 0x2001fff8 0x00 0x8 0x00 0x20018000 0x00 0x8>;
+				status = "disabled";
+				compatible = "riscv,aclint-mswi", "riscv,aclint-mtimer";
+			};
+		};
+		cpu2: cpu@2 {
+			device_type = "cpu";
+			reg-names = "cpuid", "sram", "corereg";
+			reg = <0x0002 0x00020000 0x20020000>;
+			status = "disabled";
+			compatible = "inspiresemi,riscv-2464", "riscv";
+			riscv,isa = "rv64imafdc";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "zicsr", "zifencei" ;
+			mmu-type = "riscv,sv48";
+			numa-node-id = <1>;
+			#address-cells = <0x02>;
+			#size-cells = <0x02>;
+			cpu2_intc: interrupt-controller {
+				#interrupt-cells = <0x01>;
+				interrupt-controller;
+				status = "disabled";
+				compatible = "riscv,cpu-intc";
+			};
+			clint2: clint@20024000 {
+				interrupts-extended = <&cpu2_intc 0x03 &cpu2_intc 0x07>;
+				reg-names = "irqs", "mtime", "mtimecmp";
+				reg = <0x00 0x20024000 0x00 0x8 0x00 0x2002fff8 0x00 0x8 0x00 0x20028000 0x00 0x8>;
+				status = "disabled";
+				compatible = "riscv,aclint-mswi", "riscv,aclint-mtimer";
+			};
+		};
+		cpu3: cpu@3 {
+			device_type = "cpu";
+			reg-names = "cpuid", "sram", "corereg";
+			reg = <0x0003 0x00030000 0x20030000>;
+			status = "disabled";
+			compatible = "inspiresemi,riscv-2464", "riscv";
+			riscv,isa = "rv64imafdc";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "zicsr", "zifencei" ;
+			mmu-type = "riscv,sv48";
+			numa-node-id = <1>;
+			#address-cells = <0x02>;
+			#size-cells = <0x02>;
+			cpu3_intc: interrupt-controller {
+				#interrupt-cells = <0x01>;
+				interrupt-controller;
+				status = "disabled";
+				compatible = "riscv,cpu-intc";
+			};
+			clint3: clint@20034000 {
+				interrupts-extended = <&cpu3_intc 0x03 &cpu3_intc 0x07>;
+				reg-names = "irqs", "mtime", "mtimecmp";
+				reg = <0x00 0x20034000 0x00 0x8 0x00 0x2003fff8 0x00 0x8 0x00 0x20038000 0x00 0x8>;
+				status = "disabled";
+				compatible = "riscv,aclint-mswi", "riscv,aclint-mtimer";
+			};
+		};
+		cpu4: cpu@4 {
+			device_type = "cpu";
+			reg-names = "cpuid", "sram", "corereg";
+			reg = <0x0004 0x00040000 0x20040000>;
+			status = "disabled";
+			compatible = "inspiresemi,riscv-2464", "riscv";
+			riscv,isa = "rv64imafdc";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "zicsr", "zifencei";
+			mmu-type = "riscv,sv48";
+			numa-node-id = <1>;
+			#address-cells = <0x02>;
+			#size-cells = <0x02>;
+			cpu4_intc: interrupt-controller {
+				#interrupt-cells = <0x01>;
+				interrupt-controller;
+				status = "disabled";
+				compatible = "riscv,cpu-intc";
+			};
+			clint4: clint@20044000 {
+				interrupts-extended = <&cpu4_intc 0x03 &cpu4_intc 0x07>;
+				reg-names = "irqs", "mtime", "mtimecmp";
+				reg = <0x00 0x20044000 0x00 0x8 0x00 0x2004fff8 0x00 0x8 0x00 0x20048000 0x00 0x8>;
+				status = "disabled";
+				compatible = "riscv,aclint-mswi", "riscv,aclint-mtimer";
+			};
+		};
+		cpu5: cpu@5 {
+			device_type = "cpu";
+			reg-names = "cpuid", "sram", "corereg";
+			reg = <0x0005 0x00050000 0x20050000>;
+			status = "disabled";
+			compatible = "inspiresemi,riscv-2464", "riscv";
+			riscv,isa = "rv64imafdc";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "zicsr", "zifencei";
+			mmu-type = "riscv,sv48";
+			numa-node-id = <1>;
+			#address-cells = <0x02>;
+			#size-cells = <0x02>;
+			cpu5_intc: interrupt-controller {
+				#interrupt-cells = <0x01>;
+				interrupt-controller;
+				status = "disabled";
+				compatible = "riscv,cpu-intc";
+			};
+			clint5: clint@20054000 {
+				interrupts-extended = <&cpu5_intc 0x03 &cpu5_intc 0x07>;
+				reg-names = "irqs", "mtime", "mtimecmp";
+				reg = <0x00 0x20054000 0x00 0x8 0x00 0x2005fff8 0x00 0x8 0x00 0x20058000 0x00 0x8>;
+				status = "disabled";
+				compatible = "riscv,aclint-mswi", "riscv,aclint-mtimer";
+			};
+		};
+		cpu6: cpu@6 {
+			device_type = "cpu";
+			reg-names = "cpuid", "sram", "corereg";
+			reg = <0x0006 0x00060000 0x20060000>;
+			status = "disabled";
+			compatible = "inspiresemi,riscv-2464", "riscv";
+			riscv,isa = "rv64imafdc";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "zicsr", "zifencei";
+			mmu-type = "riscv,sv48";
+			numa-node-id = <1>;
+			#address-cells = <0x02>;
+			#size-cells = <0x02>;
+			cpu6_intc: interrupt-controller {
+				#interrupt-cells = <0x01>;
+				interrupt-controller;
+				status = "disabled";
+				compatible = "riscv,cpu-intc";
+			};
+			clint6: clint@20064000 {
+				interrupts-extended = <&cpu6_intc 0x03 &cpu6_intc 0x07>;
+				reg-names = "irqs", "mtime", "mtimecmp";
+				reg = <0x00 0x20064000 0x00 0x8 0x00 0x2006fff8 0x00 0x8 0x00 0x20068000 0x00 0x8>;
+				status = "disabled";
+				compatible = "riscv,aclint-mswi", "riscv,aclint-mtimer";
+			};
+		};
+		cpu7: cpu@7 {
+			device_type = "cpu";
+			reg-names = "cpuid", "sram", "corereg";
+			reg = <0x0007 0x00070000 0x20070000>;
+			status = "disabled";
+			compatible = "inspiresemi,riscv-2464", "riscv";
+			riscv,isa = "rv64imafdc";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "zicsr", "zifencei";
+			mmu-type = "riscv,sv48";
+			numa-node-id = <1>;
+			#address-cells = <0x02>;
+			#size-cells = <0x02>;
+			cpu7_intc: interrupt-controller {
+				#interrupt-cells = <0x01>;
+				interrupt-controller;
+				status = "disabled";
+				compatible = "riscv,cpu-intc";
+			};
+			clint7: clint@20074000 {
+				interrupts-extended = <&cpu7_intc 0x03 &cpu7_intc 0x07>;
+				reg-names = "irqs", "mtime", "mtimecmp";
+				reg = <0x00 0x20074000 0x00 0x8 0x00 0x2007fff8 0x00 0x8 0x00 0x20078000 0x00 0x8>;
+				status = "disabled";
+				compatible = "riscv,aclint-mswi", "riscv,aclint-mtimer";
+			};
+		};
+		cpu8: cpu@8 {
+			device_type = "cpu";
+			reg-names = "cpuid", "sram", "corereg";
+			reg = <0x0008 0x00080000 0x20080000>;
+			status = "disabled";
+			compatible = "inspiresemi,riscv-2464", "riscv";
+			riscv,isa = "rv64imafdc";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "zicsr", "zifencei";
+			mmu-type = "riscv,sv48";
+			numa-node-id = <1>;
+			#address-cells = <0x02>;
+			#size-cells = <0x02>;
+			cpu8_intc: interrupt-controller {
+				#interrupt-cells = <0x01>;
+				interrupt-controller;
+				status = "disabled";
+				compatible = "riscv,cpu-intc";
+			};
+			clint8: clint@20084000 {
+				interrupts-extended = <&cpu8_intc 0x03 &cpu8_intc 0x07>;
+				reg-names = "irqs", "mtime", "mtimecmp";
+				reg = <0x00 0x20084000 0x00 0x8 0x00 0x2008fff8 0x00 0x8 0x00 0x20088000 0x00 0x8>;
+				status = "disabled";
+				compatible = "riscv,aclint-mswi", "riscv,aclint-mtimer";
+			};
+		};
+		cpu9: cpu@9 {
+			device_type = "cpu";
+			reg-names = "cpuid", "sram", "corereg";
+			reg = <0x0009 0x00090000 0x20090000>;
+			status = "disabled";
+			compatible = "inspiresemi,riscv-2464", "riscv";
+			riscv,isa = "rv64imafdc";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "zicsr", "zifencei";
+			mmu-type = "riscv,sv48";
+			numa-node-id = <1>;
+			#address-cells = <0x02>;
+			#size-cells = <0x02>;
+			cpu9_intc: interrupt-controller {
+				#interrupt-cells = <0x01>;
+				interrupt-controller;
+				status = "disabled";
+				compatible = "riscv,cpu-intc";
+			};
+			clint9: clint@20094000 {
+				interrupts-extended = <&cpu9_intc 0x03 &cpu9_intc 0x07>;
+				reg-names = "irqs", "mtime", "mtimecmp";
+				reg = <0x00 0x20094000 0x00 0x8 0x00 0x2009fff8 0x00 0x8 0x00 0x20098000 0x00 0x8>;
+				status = "disabled";
+				compatible = "riscv,aclint-mswi", "riscv,aclint-mtimer";
+			};
+		};
+		cpua: cpu@a {
+			device_type = "cpu";
+			reg-names = "cpuid", "sram", "corereg";
+			reg = <0x000a 0x000a0000 0x200a0000>;
+			status = "disabled";
+			compatible = "inspiresemi,riscv-2464", "riscv";
+			riscv,isa = "rv64imafdc";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "zicsr", "zifencei";
+			mmu-type = "riscv,sv48";
+			numa-node-id = <1>;
+			#address-cells = <0x02>;
+			#size-cells = <0x02>;
+			cpua_intc: interrupt-controller {
+				#interrupt-cells = <0x01>;
+				interrupt-controller;
+				status = "disabled";
+				compatible = "riscv,cpu-intc";
+			};
+			clinta: clint@200a4000 {
+				interrupts-extended = <&cpua_intc 0x03 &cpua_intc 0x07>;
+				reg-names = "irqs", "mtime", "mtimecmp";
+				reg = <0x00 0x200a4000 0x00 0x8 0x00 0x200afff8 0x00 0x8 0x00 0x200a8000 0x00 0x8>;
+				status = "disabled";
+				compatible = "riscv,aclint-mswi", "riscv,aclint-mtimer";
+			};
+		};
+		cpub: cpu@b {
+			device_type = "cpu";
+			reg-names = "cpuid", "sram", "corereg";
+			reg = <0x000b 0x000b0000 0x200b0000>;
+			status = "disabled";
+			compatible = "inspiresemi,riscv-2464", "riscv";
+			riscv,isa = "rv64imafdc";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "zicsr", "zifencei";
+			mmu-type = "riscv,sv48";
+			numa-node-id = <1>;
+			#address-cells = <0x02>;
+			#size-cells = <0x02>;
+			cpub_intc: interrupt-controller {
+				#interrupt-cells = <0x01>;
+				interrupt-controller;
+				status = "disabled";
+				compatible = "riscv,cpu-intc";
+			};
+			clintb: clint@200b4000 {
+				interrupts-extended = <&cpub_intc 0x03 &cpub_intc 0x07>;
+				reg-names = "irqs", "mtime", "mtimecmp";
+				reg = <0x00 0x200b4000 0x00 0x8 0x00 0x200bfff8 0x00 0x8 0x00 0x200b8000 0x00 0x8>;
+				status = "disabled";
+				compatible = "riscv,aclint-mswi", "riscv,aclint-mtimer";
+			};
+		};
+		cpuc: cpu@c {
+			device_type = "cpu";
+			reg-names = "cpuid", "sram", "corereg";
+			reg = <0x000c 0x000c0000 0x200c0000>;
+			status = "disabled";
+			compatible = "inspiresemi,riscv-2464", "riscv";
+			riscv,isa = "rv64imafdc";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "zicsr", "zifencei";
+			mmu-type = "riscv,sv48";
+			numa-node-id = <1>;
+			#address-cells = <0x02>;
+			#size-cells = <0x02>;
+			cpuc_intc: interrupt-controller {
+				#interrupt-cells = <0x01>;
+				interrupt-controller;
+				status = "disabled";
+				compatible = "riscv,cpu-intc";
+			};
+			clintc: clint@200c4000 {
+				interrupts-extended = <&cpuc_intc 0x03 &cpuc_intc 0x07>;
+				reg-names = "irqs", "mtime", "mtimecmp";
+				reg = <0x00 0x200c4000 0x00 0x8 0x00 0x200cfff8 0x00 0x8 0x00 0x200c8000 0x00 0x8>;
+				status = "disabled";
+				compatible = "riscv,aclint-mswi", "riscv,aclint-mtimer";
+			};
+		};
+		cpud: cpu@d {
+			device_type = "cpu";
+			reg-names = "cpuid", "sram", "corereg";
+			reg = <0x000d 0x000d0000 0x200d0000>;
+			status = "disabled";
+			compatible = "inspiresemi,riscv-2464", "riscv";
+			riscv,isa = "rv64imafdc";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "zicsr", "zifencei";
+			mmu-type = "riscv,sv48";
+			numa-node-id = <1>;
+			#address-cells = <0x02>;
+			#size-cells = <0x02>;
+			cpud_intc: interrupt-controller {
+				#interrupt-cells = <0x01>;
+				interrupt-controller;
+				status = "disabled";
+				compatible = "riscv,cpu-intc";
+			};
+			clintd: clint@200d4000 {
+				interrupts-extended = <&cpud_intc 0x03 &cpud_intc 0x07>;
+				reg-names = "irqs", "mtime", "mtimecmp";
+				reg = <0x00 0x200d4000 0x00 0x8 0x00 0x200dfff8 0x00 0x8 0x00 0x200d8000 0x00 0x8>;
+				status = "disabled";
+				compatible = "riscv,aclint-mswi", "riscv,aclint-mtimer";
+			};
+		};
+		cpue: cpu@e {
+			device_type = "cpu";
+			reg-names = "cpuid", "sram", "corereg";
+			reg = <0x000e 0x000e0000 0x200e0000>;
+			status = "disabled";
+			compatible = "inspiresemi,riscv-2464", "riscv";
+			riscv,isa = "rv64imafdc";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "zicsr", "zifencei";
+			mmu-type = "riscv,sv48";
+			numa-node-id = <1>;
+			#address-cells = <0x02>;
+			#size-cells = <0x02>;
+			cpue_intc: interrupt-controller {
+				#interrupt-cells = <0x01>;
+				interrupt-controller;
+				status = "disabled";
+				compatible = "riscv,cpu-intc";
+			};
+			clinte: clint@200e4000 {
+				interrupts-extended = <&cpue_intc 0x03 &cpue_intc 0x07>;
+				reg-names = "irqs", "mtime", "mtimecmp";
+				reg = <0x00 0x200e4000 0x00 0x8 0x00 0x200efff8 0x00 0x8 0x00 0x200e8000 0x00 0x8>;
+				status = "disabled";
+				compatible = "riscv,aclint-mswi", "riscv,aclint-mtimer";
+			};
+		};
+		cpuf: cpu@f {
+			device_type = "cpu";
+			reg-names = "cpuid", "sram", "corereg";
+			reg = <0x000f 0x000f0000 0x200f0000>;
+			status = "disabled";
+			compatible = "inspiresemi,riscv-2464", "riscv";
+			riscv,isa = "rv64imafdc";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "zicsr", "zifencei";
+			mmu-type = "riscv,sv48";
+			numa-node-id = <1>;
+			#address-cells = <0x02>;
+			#size-cells = <0x02>;
+			cpuf_intc: interrupt-controller {
+				#interrupt-cells = <0x01>;
+				interrupt-controller;
+				status = "disabled";
+				compatible = "riscv,cpu-intc";
+			};
+			clintf: clint@200f4000 {
+				interrupts-extended = <&cpuf_intc 0x03 &cpuf_intc 0x07>;
+				reg-names = "irqs", "mtime", "mtimecmp";
+				reg = <0x00 0x200f4000 0x00 0x8 0x00 0x200ffff8 0x00 0x8 0x00 0x200f8000 0x00 0x8>;
+				status = "disabled";
+				compatible = "riscv,aclint-mswi", "riscv,aclint-mtimer";
+			};
+		};
+		cpu10: cpu@10 {
+			device_type = "cpu";
+			reg-names = "cpuid", "sram", "corereg";
+			reg = <0x0010 0x00100000 0x20100000>;
+			status = "disabled";
+			compatible = "inspiresemi,riscv-2464", "riscv";
+			riscv,isa = "rv64imafdc";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "zicsr", "zifencei";
+			mmu-type = "riscv,sv48";
+			numa-node-id = <1>;
+			#address-cells = <0x02>;
+			#size-cells = <0x02>;
+			cpu10_intc: interrupt-controller {
+				#interrupt-cells = <0x01>;
+				interrupt-controller;
+				status = "disabled";
+				compatible = "riscv,cpu-intc";
+			};
+			clint10: clint@20104000 {
+				interrupts-extended = <&cpu10_intc 0x03 &cpu10_intc 0x07>;
+				reg-names = "irqs", "mtime", "mtimecmp";
+				reg = <0x00 0x20104000 0x00 0x8 0x00 0x2010fff8 0x00 0x8 0x00 0x20108000 0x00 0x8>;
+				status = "disabled";
+				compatible = "riscv,aclint-mswi", "riscv,aclint-mtimer";
+			};
+		};
+		cpu11: cpu@11 {
+			device_type = "cpu";
+			reg-names = "cpuid", "sram", "corereg";
+			reg = <0x0011 0x00110000 0x20110000>;
+			status = "disabled";
+			compatible = "inspiresemi,riscv-2464", "riscv";
+			riscv,isa = "rv64imafdc";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "zicsr", "zifencei";
+			mmu-type = "riscv,sv48";
+			numa-node-id = <1>;
+			#address-cells = <0x02>;
+			#size-cells = <0x02>;
+			cpu11_intc: interrupt-controller {
+				#interrupt-cells = <0x01>;
+				interrupt-controller;
+				status = "disabled";
+				compatible = "riscv,cpu-intc";
+			};
+			clint11: clint@20114000 {
+				interrupts-extended = <&cpu11_intc 0x03 &cpu11_intc 0x07>;
+				reg-names = "irqs", "mtime", "mtimecmp";
+				reg = <0x00 0x20114000 0x00 0x8 0x00 0x2011fff8 0x00 0x8 0x00 0x20118000 0x00 0x8>;
+				status = "disabled";
+				compatible = "riscv,aclint-mswi", "riscv,aclint-mtimer";
+			};
+		};
+		cpu12: cpu@12 {
+			device_type = "cpu";
+			reg-names = "cpuid", "sram", "corereg";
+			reg = <0x0012 0x00120000 0x20120000>;
+			status = "disabled";
+			compatible = "inspiresemi,riscv-2464", "riscv";
+			riscv,isa = "rv64imafdc";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "zicsr", "zifencei";
+			mmu-type = "riscv,sv48";
+			numa-node-id = <1>;
+			#address-cells = <0x02>;
+			#size-cells = <0x02>;
+			cpu12_intc: interrupt-controller {
+				#interrupt-cells = <0x01>;
+				interrupt-controller;
+				status = "disabled";
+				compatible = "riscv,cpu-intc";
+			};
+			clint12: clint@20124000 {
+				interrupts-extended = <&cpu12_intc 0x03 &cpu12_intc 0x07>;
+				reg-names = "irqs", "mtime", "mtimecmp";
+				reg = <0x00 0x20124000 0x00 0x8 0x00 0x2012fff8 0x00 0x8 0x00 0x20128000 0x00 0x8>;
+				status = "disabled";
+				compatible = "riscv,aclint-mswi", "riscv,aclint-mtimer";
+			};
+		};
+		cpu13: cpu@13 {
+			device_type = "cpu";
+			reg-names = "cpuid", "sram", "corereg";
+			reg = <0x0013 0x00130000 0x20130000>;
+			status = "disabled";
+			compatible = "inspiresemi,riscv-2464", "riscv";
+			riscv,isa = "rv64imafdc";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "zicsr", "zifencei";
+			mmu-type = "riscv,sv48";
+			numa-node-id = <1>;
+			#address-cells = <0x02>;
+			#size-cells = <0x02>;
+			cpu13_intc: interrupt-controller {
+				#interrupt-cells = <0x01>;
+				interrupt-controller;
+				status = "disabled";
+				compatible = "riscv,cpu-intc";
+			};
+			clint13: clint@20134000 {
+				interrupts-extended = <&cpu13_intc 0x03 &cpu13_intc 0x07>;
+				reg-names = "irqs", "mtime", "mtimecmp";
+				reg = <0x00 0x20134000 0x00 0x8 0x00 0x2013fff8 0x00 0x8 0x00 0x20138000 0x00 0x8>;
+				status = "disabled";
+				compatible = "riscv,aclint-mswi", "riscv,aclint-mtimer";
+			};
+		};
+		cpu14: cpu@14 {
+			device_type = "cpu";
+			reg-names = "cpuid", "sram", "corereg";
+			reg = <0x0014 0x00140000 0x20140000>;
+			status = "disabled";
+			compatible = "inspiresemi,riscv-2464", "riscv";
+			riscv,isa = "rv64imafdc";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "zicsr", "zifencei";
+			mmu-type = "riscv,sv48";
+			numa-node-id = <1>;
+			#address-cells = <0x02>;
+			#size-cells = <0x02>;
+			cpu14_intc: interrupt-controller {
+				#interrupt-cells = <0x01>;
+				interrupt-controller;
+				status = "disabled";
+				compatible = "riscv,cpu-intc";
+			};
+			clint14: clint@20144000 {
+				interrupts-extended = <&cpu14_intc 0x03 &cpu14_intc 0x07>;
+				reg-names = "irqs", "mtime", "mtimecmp";
+				reg = <0x00 0x20144000 0x00 0x8 0x00 0x2014fff8 0x00 0x8 0x00 0x20148000 0x00 0x8>;
+				status = "disabled";
+				compatible = "riscv,aclint-mswi", "riscv,aclint-mtimer";
+			};
+		};
+		cpu15: cpu@15 {
+			device_type = "cpu";
+			reg-names = "cpuid", "sram", "corereg";
+			reg = <0x0015 0x00150000 0x20150000>;
+			status = "disabled";
+			compatible = "inspiresemi,riscv-2464", "riscv";
+			riscv,isa = "rv64imafdc";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "zicsr", "zifencei";
+			mmu-type = "riscv,sv48";
+			numa-node-id = <1>;
+			#address-cells = <0x02>;
+			#size-cells = <0x02>;
+			cpu15_intc: interrupt-controller {
+				#interrupt-cells = <0x01>;
+				interrupt-controller;
+				status = "disabled";
+				compatible = "riscv,cpu-intc";
+			};
+			clint15: clint@20154000 {
+				interrupts-extended = <&cpu15_intc 0x03 &cpu15_intc 0x07>;
+				reg-names = "irqs", "mtime", "mtimecmp";
+				reg = <0x00 0x20154000 0x00 0x8 0x00 0x2015fff8 0x00 0x8 0x00 0x20158000 0x00 0x8>;
+				status = "disabled";
+				compatible = "riscv,aclint-mswi", "riscv,aclint-mtimer";
+			};
+		};
+		cpu16: cpu@16 {
+			device_type = "cpu";
+			reg-names = "cpuid", "sram", "corereg";
+			reg = <0x0016 0x00160000 0x20160000>;
+			status = "disabled";
+			compatible = "inspiresemi,riscv-2464", "riscv";
+			riscv,isa = "rv64imafdc";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "zicsr", "zifencei";
+			mmu-type = "riscv,sv48";
+			numa-node-id = <1>;
+			#address-cells = <0x02>;
+			#size-cells = <0x02>;
+			cpu16_intc: interrupt-controller {
+				#interrupt-cells = <0x01>;
+				interrupt-controller;
+				status = "disabled";
+				compatible = "riscv,cpu-intc";
+			};
+			clint16: clint@20164000 {
+				interrupts-extended = <&cpu16_intc 0x03 &cpu16_intc 0x07>;
+				reg-names = "irqs", "mtime", "mtimecmp";
+				reg = <0x00 0x20164000 0x00 0x8 0x00 0x2016fff8 0x00 0x8 0x00 0x20168000 0x00 0x8>;
+				status = "disabled";
+				compatible = "riscv,aclint-mswi", "riscv,aclint-mtimer";
+			};
+		};
+		cpu17: cpu@17 {
+			device_type = "cpu";
+			reg-names = "cpuid", "sram", "corereg";
+			reg = <0x0017 0x00170000 0x20170000>;
+			status = "disabled";
+			compatible = "inspiresemi,riscv-2464", "riscv";
+			riscv,isa = "rv64imafdc";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "zicsr", "zifencei";
+			mmu-type = "riscv,sv48";
+			numa-node-id = <1>;
+			#address-cells = <0x02>;
+			#size-cells = <0x02>;
+			cpu17_intc: interrupt-controller {
+				#interrupt-cells = <0x01>;
+				interrupt-controller;
+				status = "disabled";
+				compatible = "riscv,cpu-intc";
+			};
+			clint17: clint@20174000 {
+				interrupts-extended = <&cpu17_intc 0x03 &cpu17_intc 0x07>;
+				reg-names = "irqs", "mtime", "mtimecmp";
+				reg = <0x00 0x20174000 0x00 0x8 0x00 0x2017fff8 0x00 0x8 0x00 0x20178000 0x00 0x8>;
+				status = "disabled";
+				compatible = "riscv,aclint-mswi", "riscv,aclint-mtimer";
+			};
+		};
+		cpu18: cpu@18 {
+			device_type = "cpu";
+			reg-names = "cpuid", "sram", "corereg";
+			reg = <0x0018 0x00180000 0x20180000>;
+			status = "disabled";
+			compatible = "inspiresemi,riscv-2464", "riscv";
+			riscv,isa = "rv64imafdc";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "zicsr", "zifencei";
+			mmu-type = "riscv,sv48";
+			numa-node-id = <1>;
+			#address-cells = <0x02>;
+			#size-cells = <0x02>;
+			cpu18_intc: interrupt-controller {
+				#interrupt-cells = <0x01>;
+				interrupt-controller;
+				status = "disabled";
+				compatible = "riscv,cpu-intc";
+			};
+			clint18: clint@20184000 {
+				interrupts-extended = <&cpu18_intc 0x03 &cpu18_intc 0x07>;
+				reg-names = "irqs", "mtime", "mtimecmp";
+				reg = <0x00 0x20184000 0x00 0x8 0x00 0x2018fff8 0x00 0x8 0x00 0x20188000 0x00 0x8>;
+				status = "disabled";
+				compatible = "riscv,aclint-mswi", "riscv,aclint-mtimer";
+			};
+		};
+		cpu19: cpu@19 {
+			device_type = "cpu";
+			reg-names = "cpuid", "sram", "corereg";
+			reg = <0x0019 0x00190000 0x20190000>;
+			status = "disabled";
+			compatible = "inspiresemi,riscv-2464", "riscv";
+			riscv,isa = "rv64imafdc";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "zicsr", "zifencei";
+			mmu-type = "riscv,sv48";
+			numa-node-id = <1>;
+			#address-cells = <0x02>;
+			#size-cells = <0x02>;
+			cpu19_intc: interrupt-controller {
+				#interrupt-cells = <0x01>;
+				interrupt-controller;
+				status = "disabled";
+				compatible = "riscv,cpu-intc";
+			};
+			clint19: clint@20194000 {
+				interrupts-extended = <&cpu19_intc 0x03 &cpu19_intc 0x07>;
+				reg-names = "irqs", "mtime", "mtimecmp";
+				reg = <0x00 0x20194000 0x00 0x8 0x00 0x2019fff8 0x00 0x8 0x00 0x20198000 0x00 0x8>;
+				status = "disabled";
+				compatible = "riscv,aclint-mswi", "riscv,aclint-mtimer";
+			};
+		};
+		cpu1a: cpu@1a {
+			device_type = "cpu";
+			reg-names = "cpuid", "sram", "corereg";
+			reg = <0x001a 0x001a0000 0x201a0000>;
+			status = "disabled";
+			compatible = "inspiresemi,riscv-2464", "riscv";
+			riscv,isa = "rv64imafdc";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "zicsr", "zifencei";
+			mmu-type = "riscv,sv48";
+			numa-node-id = <1>;
+			#address-cells = <0x02>;
+			#size-cells = <0x02>;
+			cpu1a_intc: interrupt-controller {
+				#interrupt-cells = <0x01>;
+				interrupt-controller;
+				status = "disabled";
+				compatible = "riscv,cpu-intc";
+			};
+			clint1a: clint@201a4000 {
+				interrupts-extended = <&cpu1a_intc 0x03 &cpu1a_intc 0x07>;
+				reg-names = "irqs", "mtime", "mtimecmp";
+				reg = <0x00 0x201a4000 0x00 0x8 0x00 0x201afff8 0x00 0x8 0x00 0x201a8000 0x00 0x8>;
+				status = "disabled";
+				compatible = "riscv,aclint-mswi", "riscv,aclint-mtimer";
+			};
+		};
+		cpu1b: cpu@1b {
+			device_type = "cpu";
+			reg-names = "cpuid", "sram", "corereg";
+			reg = <0x001b 0x001b0000 0x201b0000>;
+			status = "disabled";
+			compatible = "inspiresemi,riscv-2464", "riscv";
+			riscv,isa = "rv64imafdc";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "zicsr", "zifencei";
+			mmu-type = "riscv,sv48";
+			numa-node-id = <1>;
+			#address-cells = <0x02>;
+			#size-cells = <0x02>;
+			cpu1b_intc: interrupt-controller {
+				#interrupt-cells = <0x01>;
+				interrupt-controller;
+				status = "disabled";
+				compatible = "riscv,cpu-intc";
+			};
+			clint1b: clint@201b4000 {
+				interrupts-extended = <&cpu1b_intc 0x03 &cpu1b_intc 0x07>;
+				reg-names = "irqs", "mtime", "mtimecmp";
+				reg = <0x00 0x201b4000 0x00 0x8 0x00 0x201bfff8 0x00 0x8 0x00 0x201b8000 0x00 0x8>;
+				status = "disabled";
+				compatible = "riscv,aclint-mswi", "riscv,aclint-mtimer";
+			};
+		};
+		cpu1c: cpu@1c {
+			device_type = "cpu";
+			reg-names = "cpuid", "sram", "corereg";
+			reg = <0x001c 0x001c0000 0x201c0000>;
+			status = "disabled";
+			compatible = "inspiresemi,riscv-2464", "riscv";
+			riscv,isa = "rv64imafdc";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "zicsr", "zifencei";
+			mmu-type = "riscv,sv48";
+			numa-node-id = <1>;
+			#address-cells = <0x02>;
+			#size-cells = <0x02>;
+			cpu1c_intc: interrupt-controller {
+				#interrupt-cells = <0x01>;
+				interrupt-controller;
+				status = "disabled";
+				compatible = "riscv,cpu-intc";
+			};
+			clint1c: clint@201c4000 {
+				interrupts-extended = <&cpu1c_intc 0x03 &cpu1c_intc 0x07>;
+				reg-names = "irqs", "mtime", "mtimecmp";
+				reg = <0x00 0x201c4000 0x00 0x8 0x00 0x201cfff8 0x00 0x8 0x00 0x201c8000 0x00 0x8>;
+				status = "disabled";
+				compatible = "riscv,aclint-mswi", "riscv,aclint-mtimer";
+			};
+		};
+		cpu1d: cpu@1d {
+			device_type = "cpu";
+			reg-names = "cpuid", "sram", "corereg";
+			reg = <0x001d 0x001d0000 0x201d0000>;
+			status = "disabled";
+			compatible = "inspiresemi,riscv-2464", "riscv";
+			riscv,isa = "rv64imafdc";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "zicsr", "zifencei";
+			mmu-type = "riscv,sv48";
+			numa-node-id = <1>;
+			#address-cells = <0x02>;
+			#size-cells = <0x02>;
+			cpu1d_intc: interrupt-controller {
+				#interrupt-cells = <0x01>;
+				interrupt-controller;
+				status = "disabled";
+				compatible = "riscv,cpu-intc";
+			};
+			clint1d: clint@201d4000 {
+				interrupts-extended = <&cpu1d_intc 0x03 &cpu1d_intc 0x07>;
+				reg-names = "irqs", "mtime", "mtimecmp";
+				reg = <0x00 0x201d4000 0x00 0x8 0x00 0x201dfff8 0x00 0x8 0x00 0x201d8000 0x00 0x8>;
+				status = "disabled";
+				compatible = "riscv,aclint-mswi", "riscv,aclint-mtimer";
+			};
+		};
+		cpu1e: cpu@1e {
+			device_type = "cpu";
+			reg-names = "cpuid", "sram", "corereg";
+			reg = <0x001e 0x001e0000 0x201e0000>;
+			status = "disabled";
+			compatible = "inspiresemi,riscv-2464", "riscv";
+			riscv,isa = "rv64imafdc";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "zicsr", "zifencei";
+			mmu-type = "riscv,sv48";
+			numa-node-id = <1>;
+			#address-cells = <0x02>;
+			#size-cells = <0x02>;
+			cpu1e_intc: interrupt-controller {
+				#interrupt-cells = <0x01>;
+				interrupt-controller;
+				status = "disabled";
+				compatible = "riscv,cpu-intc";
+			};
+			clint1e: clint@201e4000 {
+				interrupts-extended = <&cpu1e_intc 0x03 &cpu1e_intc 0x07>;
+				reg-names = "irqs", "mtime", "mtimecmp";
+				reg = <0x00 0x201e4000 0x00 0x8 0x00 0x201efff8 0x00 0x8 0x00 0x201e8000 0x00 0x8>;
+				status = "disabled";
+				compatible = "riscv,aclint-mswi", "riscv,aclint-mtimer";
+			};
+		};
+		cpu1f: cpu@1f {
+			device_type = "cpu";
+			reg-names = "cpuid", "sram", "corereg";
+			reg = <0x001f 0x001f0000 0x201f0000>;
+			status = "disabled";
+			compatible = "inspiresemi,riscv-2464", "riscv";
+			riscv,isa = "rv64imafdc";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "f", "d", "c", "zicsr", "zifencei";
+			mmu-type = "riscv,sv48";
+			numa-node-id = <1>;
+			#address-cells = <0x02>;
+			#size-cells = <0x02>;
+			cpu1f_intc: interrupt-controller {
+				#interrupt-cells = <0x01>;
+				interrupt-controller;
+				status = "disabled";
+				compatible = "riscv,cpu-intc";
+			};
+			clint1f: clint@201f4000 {
+				interrupts-extended = <&cpu1f_intc 0x03 &cpu1f_intc 0x07>;
+				reg-names = "irqs", "mtime", "mtimecmp";
+				reg = <0x00 0x201f4000 0x00 0x8 0x00 0x201ffff8 0x00 0x8 0x00 0x201f8000 0x00 0x8>;
+				status = "disabled";
+				compatible = "riscv,aclint-mswi", "riscv,aclint-mtimer";
+			};
+		};
+
+		cpu-map {
+			cluster0 {
+				core0 {
+					cpu = <&cpu0>;
+				};
+				core1 {
+					cpu = <&cpu1>;
+				};
+				core2 {
+					cpu = <&cpu2>;
+				};
+				core3 {
+					cpu = <&cpu3>;
+				};
+				core4 {
+					cpu = <&cpu4>;
+				};
+				core5 {
+					cpu = <&cpu5>;
+				};
+				core6 {
+					cpu = <&cpu6>;
+				};
+				core7 {
+					cpu = <&cpu7>;
+				};
+				core8 {
+					cpu = <&cpu8>;
+				};
+				core9 {
+					cpu = <&cpu9>;
+				};
+				corea {
+					cpu = <&cpua>;
+				};
+				coreb {
+					cpu = <&cpub>;
+				};
+				corec {
+					cpu = <&cpuc>;
+				};
+				cored {
+					cpu = <&cpud>;
+				};
+				coree {
+					cpu = <&cpue>;
+				};
+				coref {
+					cpu = <&cpuf>;
+				};
+				core10 {
+					cpu = <&cpu10>;
+				};
+				core11 {
+					cpu = <&cpu11>;
+				};
+				core12 {
+					cpu = <&cpu12>;
+				};
+				core13 {
+					cpu = <&cpu13>;
+				};
+				core14 {
+					cpu = <&cpu14>;
+				};
+				core15 {
+					cpu = <&cpu15>;
+				};
+				core16 {
+					cpu = <&cpu16>;
+				};
+				core17 {
+					cpu = <&cpu17>;
+				};
+				core18 {
+					cpu = <&cpu18>;
+				};
+				core19 {
+					cpu = <&cpu19>;
+				};
+				core1a {
+					cpu = <&cpu1a>;
+				};
+				core1b {
+					cpu = <&cpu1b>;
+				};
+				core1c {
+					cpu = <&cpu1c>;
+				};
+				core1d {
+					cpu = <&cpu1d>;
+				};
+				core1e {
+					cpu = <&cpu1e>;
+				};
+				core1f {
+					cpu = <&cpu1f>;
+				};
+			};
+		};
+	};
+
+	distance-map {
+		compatible = "numa-distance-map-v1";
+		distance-matrix = <0 0 10>, <0 1 50>, <1 0 50>, <1 1 10>;
+	};
+
+	soc {
+		#address-cells = <0x02>;
+		#size-cells = <0x02>;
+		compatible = "simple-bus";
+		ranges;
+
+		dirq0: dirq-interrupt-controller {
+			#interrupt-cells = <1>;
+			compatible = "inspiresemi,dirq";
+			status = "disabled";
+			interrupt-controller;
+			interrupts-extended = <&cpu0_intc 9>, <&cpu1_intc 9>,
+									<&cpu2_intc 9>, <&cpu4_intc 9>,
+									<&cpu6_intc 9>;
+		};
+
+		usart0: serial@70010100 {
+			current-speed = <3000000>;
+			clock-names = "usart_clk";
+			clocks = <&usart_clk>;
+			reg = <0x00 0x70010100 0x00 0x10>;
+			reg-shift = <0>;
+			status = "disabled";
+			compatible = "ns16550a";
+			interrupt-parent = <&dirq0>;
+			interrupts = <0>;
+		};
+
+		usart1: serial@70010000 {
+			current-speed = <3000000>;
+			clock-names = "usart_clk";
+			clocks = <&usart_clk>;
+			reg = <0x00 0x70010000 0x00 0x10>;
+			reg-shift = <0>;
+			status = "disabled";
+			compatible = "ns16550a";
+			interrupt-parent = <&dirq0>;
+			interrupts = <2>;
+		};
+
+		usart2: serial@27fe4000000000 {
+			current-speed = <3000000>;
+			clock-names = "usart_clk";
+			clocks = <&usart_clk>;
+			reg = <0x0027fe40 0x00 0x00 0x10>;
+			reg-shift = <0>;
+			status = "disabled";
+			compatible = "ns16550a";
+			interrupt-parent = <&dirq0>;
+			interrupts = <3>;
+		};
+
+		usart3: serial@27fe4000000010 {
+			current-speed = <3000000>;
+			clock-names = "usart_clk";
+			clocks = <&usart_clk>;
+			reg = <0x0027fe40 0x10 0x00 0x10>;
+			reg-shift = <0>;
+			status = "disabled";
+			compatible = "ns16550a";
+			interrupt-parent = <&dirq0>;
+			interrupts = <4>;
+		};
+
+		eth0: ethernet@808c0000000000 {
+			#address-cells = <0x01>;
+			#size-cells = <0x00>;
+			compatible = "cdns,gem", "cdns,macb";
+			status = "disabled";
+			reg = <0x00808c00 0x00000000 0x00 0x1000>;
+			interrupt-parent = <&dirq0>;
+			interrupts = <1>;
+			clocks = <&clk_bus>, <&clk_bus>;
+			clock-names = "hclk", "pclk";
+			/* Filled in by boot */
+			mac-address = [ 52 54 00 12 35 02 ];
+			numa-node-id = <0>;
+			phy-mode = "gmii";
+			ethphy0: ethernet-phy@0 {
+				reg = <0>;
+			};
+		};
+	};
+
+	clocks {
+		usart_clk: usart_clk {
+			#clock-cells = <0>;
+			compatible = "fixed-clock";
+			clock-frequency = <100000000>;
+			clock-accuracy = <1>;
+		};
+		clk_bus: clk_bus {
+			#clock-cells = <0>;
+			compatible = "fixed-clock";
+			clock-frequency = <198000000>;
+			clock-accuracy = <1>;
+		};
+	};
+};
