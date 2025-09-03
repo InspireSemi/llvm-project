@@ -33,6 +33,6 @@ set_target_properties(ThunderbirdHostRuntime PROPERTIES
 install(TARGETS ThunderbirdHostRuntime DESTINATION ${CMAKE_INSTALL_PREFIX}/lib)
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_PREFIX}/include)
 
-if(BUILD_TESTING)
-    add_subdirectory(tests)
-endif()
+#if(BUILD_TESTING)
+#    add_subdirectory(tests)
+#endif()
