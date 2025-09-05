@@ -346,3 +346,55 @@ bool run_batch_integrity_tests() {
         return false;
     }
 }
+
+bool tbird_resp_wait(std::vector<std::pair<int, message_slot_t>> &waiting_batch, std::unique_ptr<DataTransferEngineReadBase> &rd_channel, std::vector<std::pair<int, message_slot_t>> &body_slots, std::vector<std::pair<int, message_slot_t>> &response_batch){
+        
+        // Step 2: Wait for and validate malloc response batch
+        bool response_received = false;
+        
+        for (int timeout = 0; timeout < 50 && !response_received; ++timeout) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            
+            response_batch.clear();
+            for (const auto& [slot_index, _] : waiting_batch) {
+                message_slot_t slot;
+                if (MailboxUtils::readD2HMessage(*rd_channel, slot_index, &slot)) {
+                    if (slot.msg_id != MSG_INVALID) {
+                        response_batch.push_back({slot_index, slot});
+                        std::cout << "Peeked response in slot " << slot_index 
+                                 << " with message ID " << MessageUtils::getMessageIdString(slot.msg_id) << std::endl;
+                    }
+                }
+            }
+            
+            int begin_slot, end_slot;
+            bool is_cmd, is_rsp;
+            
+            if (confirm_batch_integrity(response_batch, begin_slot, end_slot, is_cmd, is_rsp, body_slots)) {
+                if (is_rsp && !is_cmd) {
+                    std::cout << "✓ Valid malloc response batch received!" << std::endl;
+                    
+                    std::cout << "\n=== MALLOC RESPONSE BATCH ===" << std::endl;
+                    for (const auto& [slot_index, slot] : response_batch) {
+                        std::cout << "\n--- Response Slot " << slot_index << " ---" << std::endl;
+                        MessageUtils::printMessageSlot(&slot);
+                    }
+                    std::cout << "============================\n" << std::endl;
+                    
+                    response_received = true;
+                    break;
+                }
+            }
+            
+            if (timeout % 10 == 0) {
+                std::cout << "Timeout " << timeout << ": Still waiting for malloc response..." << std::endl;
+            }
+        }
+        
+        if (!response_received) {
+            std::cerr << "Error: Malloc request timed out" << std::endl;
+            return false;
+        }
+        return true;
+}
+

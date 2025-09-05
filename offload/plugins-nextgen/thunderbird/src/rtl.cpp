@@ -33,6 +33,11 @@
 
 // Thunderbird headers
 #include "DataTransferEngineFactory.hpp"
+#include "ThunderbirdRuntime.hpp"
+#include "DataTransferBackend.hpp"
+#include "MailboxUtils.hpp"
+#include "BatchUtils.hpp"
+#include "MessageUtils.hpp"
 
 #if !defined(__BYTE_ORDER__) || !defined(__ORDER_LITTLE_ENDIAN__) ||           \
     !defined(__ORDER_BIG_ENDIAN__)
@@ -316,7 +321,58 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
   /// Free the memory. Use std::free in all cases.
   // TODO: switch the free below for the target free
   int free(void *TgtPtr, TargetAllocTy Kind) override {
-    std::free(TgtPtr);
+//    std::free(TgtPtr);
+    std::vector<message_slot_t> free_batch_body(1);
+    if (!MessageUtils::createFreeCmd(&free_batch_body[0], (uint64_t) TgtPtr)) {
+            std::cerr << "Error: Failed to create free command" << std::endl;
+            return false;
+    }
+    std::vector<std::pair<int, message_slot_t>> free_batch;
+     if (!create_command_batch(free_batch_body, 0, free_batch)) {
+            std::cerr << "Error: Failed to create free batch" << std::endl;
+            return false;
+     }    
+    
+    for(const auto& [slot_index, _] : free_batch){
+      MailboxUtils::clearD2HSlot(*wrChannel, slot_index);
+    }
+    for (const auto& [slot_index, slot] : free_batch) {
+            if (!MailboxUtils::writeH2DMessage(*wrChannel, slot_index, &slot)) {
+                std::cerr << "Error: Failed to write free batch slot " << slot_index << std::endl;
+                return false;
+            }
+        }
+    std::vector<std::pair<int, message_slot_t>> respSlots;
+    std::vector<std::pair<int, message_slot_t>> respBatch;
+    if(!tbird_resp_wait(free_batch, rdChannel, respSlots, respBatch)){
+	    return false;
+    }
+
+
+   free_rsp_t free_rsp;
+   for(const auto& [slot_index, slot] : respSlots){
+    if (slot.msg_id == MSG_RSP_FREE) {
+          if (!MessageUtils::extractPayload(&slot, &free_rsp)) {
+                 std::cerr << "Error: Failed to extract free response payload" << std::endl;
+                    return false;
+                }
+       }
+    else { 
+	    std::cerr << "Whatever has happened is not a free." << std::endl;
+	    return false;
+    }
+   }
+   if(free_rsp.status == ERR_OK){
+     std::cout << "Good free" << std::endl;
+   }
+   else{
+     std::cerr << "Free failed with status: " << MessageUtils::getErrorCodeString(free_rsp.status) << std::endl;
+   }
+  
+   for (const auto& [clear_slot_idx, _] : respBatch) {
+            MailboxUtils::clearD2HSlot(*wrChannel, clear_slot_idx);
+   }
+
     return OFFLOAD_SUCCESS;
   }
 
