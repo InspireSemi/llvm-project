@@ -62,6 +62,35 @@ namespace llvm {
 namespace omp {
 namespace target {
 namespace plugin {
+using response_types = std::variant< std::monostate, launch_rsp_t, free_rsp_t>;
+
+struct ResponseTypeVisitor {
+   ResponseTypeVisitor() = default;
+
+   template<typename T> void operator()(T & t) {}
+   template<> void operator()(launch_rsp_t & t) {}
+   template<> void operator()(free_rsp_t & t) {
+        if(!MessageUtils::extractPayload(slot, &t)){
+                        std::cerr << "Free extraction failed." << std::endl;
+                   }
+        if(t.status == ERR_OK){
+                  std::cout << "Free returned successfully." << std::endl;
+                }
+         else{
+           std::cerr << "Warning: Free failed with status: "
+                     << MessageUtils::getErrorCodeString(t.status) << std::endl;
+           }
+         }
+
+   const message_slot_t *slot;
+};
+
+response_types process(ResponseTypeVisitor & rtv, response_types & rt, message_slot_t const *slot) {
+   rtv.slot = slot;	
+   std::visit(rtv, rt);
+   return rt;
+}
+
 
 /// Forward declarations for all specialized data structures.
 struct ThunderbirdKernelTy;
@@ -348,9 +377,24 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
 	    return false;
     }
 
+std::map<uint64_t, response_types> response_lut = {
+   { MSG_RSP_LAUNCH, response_types{launch_rsp_t{}} },
+   { MSG_RSP_FREE, response_types{free_rsp_t{}} }
+};
 
-   free_rsp_t free_rsp;
-   for(const auto& [slot_index, slot] : respSlots){
+auto const response_lut_end = response_lut.end();
+
+auto response_lut_itr = response_lut.begin();
+
+ResponseTypeVisitor rtv{};
+
+for( const auto& [slot_index, slot] : respSlots) {
+   response_lut_itr = response_lut.find(slot.msg_id);
+   if(response_lut_itr != response_lut_end) {
+      process(rtv, response_lut_itr->second, &slot);
+   }
+}
+/*   for(const auto& [slot_index, slot] : respSlots){
     if (slot.msg_id == MSG_RSP_FREE) {
           if (!MessageUtils::extractPayload(&slot, &free_rsp)) {
                  std::cerr << "Error: Failed to extract free response payload" << std::endl;
@@ -368,7 +412,7 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
    else{
      std::cerr << "Free failed with status: " << MessageUtils::getErrorCodeString(free_rsp.status) << std::endl;
    }
-  
+  */
    for (const auto& [clear_slot_idx, _] : respBatch) {
             MailboxUtils::clearD2HSlot(*wrChannel, clear_slot_idx);
    }
