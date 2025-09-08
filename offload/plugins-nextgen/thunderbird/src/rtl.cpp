@@ -62,13 +62,26 @@ namespace llvm {
 namespace omp {
 namespace target {
 namespace plugin {
-using response_types = std::variant< std::monostate, launch_rsp_t, free_rsp_t>;
+using response_types = std::variant< std::monostate, launch_rsp_t, malloc_rsp_t, free_rsp_t>;
 
 struct ResponseTypeVisitor {
    ResponseTypeVisitor() = default;
 
    template<typename T> void operator()(T & t) {}
    template<> void operator()(launch_rsp_t & t) {}
+   template<> void operator()(malloc_rsp_t & t) {
+     is_malloc = true;
+          if(!MessageUtils::extractPayload(slot, &t)){
+                        std::cerr << "Malloc extraction failed." << std::endl;
+                   }
+        if(t.status == ERR_OK){
+                  std::cout << "Malloc returned successfully." << std::endl;
+                }
+         else{
+           std::cerr << "Warning: Malloc failed with status: "
+                     << MessageUtils::getErrorCodeString(t.status) << std::endl;
+           }
+   }
    template<> void operator()(free_rsp_t & t) {
         if(!MessageUtils::extractPayload(slot, &t)){
                         std::cerr << "Free extraction failed." << std::endl;
@@ -82,6 +95,7 @@ struct ResponseTypeVisitor {
            }
          }
 
+   bool is_malloc = false;
    const message_slot_t *slot;
 };
 
@@ -338,9 +352,62 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     switch (Kind) {
     case TARGET_ALLOC_DEFAULT:
     case TARGET_ALLOC_DEVICE:
-    case TARGET_ALLOC_HOST:
     case TARGET_ALLOC_SHARED:
     case TARGET_ALLOC_DEVICE_NON_BLOCKING:
+     {
+      std::vector<message_slot_t> malloc_batch_body(1);
+      if (!MessageUtils::createMallocCmd(&malloc_batch_body[0], Size)) {
+            std::cerr << "Error: Failed to create malloc command" << std::endl;
+            return nullptr;
+      }
+      std::vector<std::pair<int, message_slot_t>> malloc_batch;
+      if (!create_command_batch(malloc_batch_body, 0, malloc_batch)) {
+            std::cerr << "Error: Failed to create free batch" << std::endl;
+            return nullptr;
+      }
+
+      for(const auto& [slot_index, _] : malloc_batch){
+        MailboxUtils::clearD2HSlot(*wrChannel, slot_index);
+      }
+      for (const auto& [slot_index, slot] : malloc_batch) {
+            if (!MailboxUtils::writeH2DMessage(*wrChannel, slot_index, &slot)) {
+                std::cerr << "Error: Failed to write free batch slot " << slot_index << std::endl;
+                return nullptr;
+            }
+      }
+      std::vector<std::pair<int, message_slot_t>> respSlots;
+      std::vector<std::pair<int, message_slot_t>> respBatch;
+      if(!tbird_resp_wait(malloc_batch, rdChannel, respSlots, respBatch)){
+            return nullptr;
+      }
+
+      std::map<uint64_t, response_types> response_lut = {
+        { MSG_RSP_LAUNCH, response_types{launch_rsp_t{}} },
+        { MSG_RSP_MALLOC, response_types{malloc_rsp_t{}} },
+        { MSG_RSP_FREE, response_types{free_rsp_t{}} }
+      };
+
+      auto const response_lut_end = response_lut.end();
+
+      auto response_lut_itr = response_lut.begin();
+
+      ResponseTypeVisitor rtv{};
+
+      malloc_rsp_t m_resp;
+      for( const auto& [slot_index, slot] : respSlots) {
+        response_lut_itr = response_lut.find(slot.msg_id);
+        if(response_lut_itr != response_lut_end) {
+          m_resp = std::get<malloc_rsp_t>(process(rtv, response_lut_itr->second, &slot));
+        }
+      }
+      MemAlloc = (void *) m_resp.address;
+      for (const auto& [clear_slot_idx, _] : respBatch) {
+            MailboxUtils::clearD2HSlot(*wrChannel, clear_slot_idx);
+      }
+      //MemAlloc = std::malloc(Size);
+      break;
+     }
+    case TARGET_ALLOC_HOST:
       MemAlloc = std::malloc(Size);
       break;
     }
@@ -360,7 +427,7 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
      if (!create_command_batch(free_batch_body, 0, free_batch)) {
             std::cerr << "Error: Failed to create free batch" << std::endl;
             return false;
-     }    
+    }    
     
     for(const auto& [slot_index, _] : free_batch){
       MailboxUtils::clearD2HSlot(*wrChannel, slot_index);
@@ -370,52 +437,34 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
                 std::cerr << "Error: Failed to write free batch slot " << slot_index << std::endl;
                 return false;
             }
-        }
+    }
     std::vector<std::pair<int, message_slot_t>> respSlots;
     std::vector<std::pair<int, message_slot_t>> respBatch;
     if(!tbird_resp_wait(free_batch, rdChannel, respSlots, respBatch)){
 	    return false;
     }
 
-std::map<uint64_t, response_types> response_lut = {
-   { MSG_RSP_LAUNCH, response_types{launch_rsp_t{}} },
-   { MSG_RSP_FREE, response_types{free_rsp_t{}} }
-};
+    std::map<uint64_t, response_types> response_lut = {
+      { MSG_RSP_LAUNCH, response_types{launch_rsp_t{}} },
+      { MSG_RSP_MALLOC, response_types{malloc_rsp_t{}} },
+      { MSG_RSP_FREE, response_types{free_rsp_t{}} }
+    };
 
-auto const response_lut_end = response_lut.end();
+    auto const response_lut_end = response_lut.end();
 
-auto response_lut_itr = response_lut.begin();
+    auto response_lut_itr = response_lut.begin();
 
-ResponseTypeVisitor rtv{};
+    ResponseTypeVisitor rtv{};
 
-for( const auto& [slot_index, slot] : respSlots) {
-   response_lut_itr = response_lut.find(slot.msg_id);
-   if(response_lut_itr != response_lut_end) {
-      process(rtv, response_lut_itr->second, &slot);
-   }
-}
-/*   for(const auto& [slot_index, slot] : respSlots){
-    if (slot.msg_id == MSG_RSP_FREE) {
-          if (!MessageUtils::extractPayload(&slot, &free_rsp)) {
-                 std::cerr << "Error: Failed to extract free response payload" << std::endl;
-                    return false;
-                }
+    for( const auto& [slot_index, slot] : respSlots) {
+       response_lut_itr = response_lut.find(slot.msg_id);
+       if(response_lut_itr != response_lut_end) {
+          process(rtv, response_lut_itr->second, &slot);
        }
-    else { 
-	    std::cerr << "Whatever has happened is not a free." << std::endl;
-	    return false;
     }
-   }
-   if(free_rsp.status == ERR_OK){
-     std::cout << "Good free" << std::endl;
-   }
-   else{
-     std::cerr << "Free failed with status: " << MessageUtils::getErrorCodeString(free_rsp.status) << std::endl;
-   }
-  */
-   for (const auto& [clear_slot_idx, _] : respBatch) {
+    for (const auto& [clear_slot_idx, _] : respBatch) {
             MailboxUtils::clearD2HSlot(*wrChannel, clear_slot_idx);
-   }
+    }
 
     return OFFLOAD_SUCCESS;
   }
