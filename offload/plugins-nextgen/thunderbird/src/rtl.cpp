@@ -377,7 +377,7 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
       }
       std::vector<std::pair<int, message_slot_t>> respSlots;
       std::vector<std::pair<int, message_slot_t>> respBatch;
-      if(!::tbird_resp_wait(malloc_batch, rdChannel, respSlots, respBatch)){
+      if(!tbird_resp_wait(malloc_batch, rdChannel, respSlots, respBatch)){
             return nullptr;
       }
 
@@ -440,7 +440,7 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     }
     std::vector<std::pair<int, message_slot_t>> respSlots;
     std::vector<std::pair<int, message_slot_t>> respBatch;
-    if(!::tbird_resp_wait(free_batch, rdChannel, respSlots, respBatch)){
+    if(!tbird_resp_wait(free_batch, rdChannel, respSlots, respBatch)){
 	    return false;
     }
 
