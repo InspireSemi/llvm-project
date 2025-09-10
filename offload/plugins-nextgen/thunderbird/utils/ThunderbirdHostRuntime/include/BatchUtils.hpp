@@ -1,3 +1,5 @@
+#ifndef THUNDERBIRD_MAILBOX_UTILS_HPP
+#define THUNDERBIRD_MAILBOX_UTILS_HPP
 #pragma once
 
 // Functions for verifying things like identifying a batch of response messages, testing their completeness, and checking if they are the response to a command batch.
@@ -42,7 +44,7 @@ namespace {
     }
 
     // Helper function to validate batch consistency
-    bool validate_batch_consistency(bool found_cmd_begin, bool found_cmd_end, 
+    bool validate_batch_consistency(bool found_cmd_begin, bool found_cmd_end,
                                    bool found_rsp_begin, bool found_rsp_end,
                                    bool& is_cmd, bool& is_rsp) {
         if (found_cmd_begin && found_cmd_end && !found_rsp_begin && !found_rsp_end) {
@@ -56,7 +58,7 @@ namespace {
     }
 
     // Helper function to verify slot sets match
-    bool verify_slot_sets_match(const std::set<uint8_t>& begin_slots, 
+    bool verify_slot_sets_match(const std::set<uint8_t>& begin_slots,
                                 const std::set<uint8_t>& end_slots,
                                 uint32_t begin_count, uint32_t end_count) {
         return (begin_count == end_count) && (begin_slots == end_slots);
@@ -85,7 +87,7 @@ namespace {
 
 // Function to get, given a vector of pairs of slot indices and message slots, whether there is 1 begin command and 1 end command and if they agree on what the slot indices should be, and those slot indices
 // are nominally in the vector.
-bool confirm_batch_integrity(const std::vector<std::pair<int, message_slot_t>>& slots, 
+bool confirm_batch_integrity(const std::vector<std::pair<int, message_slot_t>>& slots,
                            int& begin_slot, int& end_slot, bool& is_cmd, bool& is_rsp,
                            std::vector<std::pair<int, message_slot_t>>& body_slots) {
     begin_slot = -1;
@@ -93,12 +95,12 @@ bool confirm_batch_integrity(const std::vector<std::pair<int, message_slot_t>>& 
     is_cmd = false;
     is_rsp = false;
     body_slots.clear();
-    
+
     bool found_cmd_begin = false;
     bool found_rsp_begin = false;
     bool found_cmd_end = false;
     bool found_rsp_end = false;
-    
+
     std::set<uint8_t> begin_advertised_slots;
     std::set<uint8_t> end_advertised_slots;
     uint32_t begin_slot_count = 0;
@@ -112,7 +114,7 @@ bool confirm_batch_integrity(const std::vector<std::pair<int, message_slot_t>>& 
             if (!extract_batch_slots(slot, begin_advertised_slots, begin_slot_count)) {
                 return false;
             }
-            
+
         } else if (slot.msg_id == MSG_RSP_BEGIN_BATCH) {
             if (begin_slot != -1) return false; // More than one begin command found
             begin_slot = index;
@@ -120,7 +122,7 @@ bool confirm_batch_integrity(const std::vector<std::pair<int, message_slot_t>>& 
             if (!extract_batch_slots(slot, begin_advertised_slots, begin_slot_count)) {
                 return false;
             }
-            
+
         } else if (slot.msg_id == MSG_CMD_END_BATCH) {
             if (end_slot != -1) return false; // More than one end command found
             end_slot = index;
@@ -128,7 +130,7 @@ bool confirm_batch_integrity(const std::vector<std::pair<int, message_slot_t>>& 
             if (!extract_batch_slots(slot, end_advertised_slots, end_slot_count)) {
                 return false;
             }
-            
+
         } else if (slot.msg_id == MSG_RSP_END_BATCH) {
             if (end_slot != -1) return false; // More than one end command found
             end_slot = index;
@@ -145,13 +147,13 @@ bool confirm_batch_integrity(const std::vector<std::pair<int, message_slot_t>>& 
     }
 
     // Validate batch consistency (cmd vs rsp)
-    if (!validate_batch_consistency(found_cmd_begin, found_cmd_end, 
+    if (!validate_batch_consistency(found_cmd_begin, found_cmd_end,
                                    found_rsp_begin, found_rsp_end, is_cmd, is_rsp)) {
         return false;
     }
 
     // Verify begin and end slot sets match
-    if (!verify_slot_sets_match(begin_advertised_slots, end_advertised_slots, 
+    if (!verify_slot_sets_match(begin_advertised_slots, end_advertised_slots,
                                begin_slot_count, end_slot_count)) {
         return false;
     }
@@ -169,7 +171,7 @@ bool confirm_batch_integrity(const std::vector<std::pair<int, message_slot_t>>& 
     }
 
     // Sort body slots by index to ensure proper order
-    std::sort(body_slots.begin(), body_slots.end(), 
+    std::sort(body_slots.begin(), body_slots.end(),
               [](const auto& a, const auto& b) { return a.first < b.first; });
 
     return true;
@@ -186,41 +188,41 @@ bool create_command_batch(const std::vector<message_slot_t>& body_messages,
                          uint8_t start_slot_index,
                          std::vector<std::pair<int, message_slot_t>>& batch_slots) {
     batch_slots.clear();
-    
+
     if (body_messages.empty() || start_slot_index + body_messages.size() + 1 >= 256) {
         return false; // Invalid parameters or would overflow uint8_t
     }
-    
+
     // Create slot index vector
     std::vector<uint8_t> slot_indices;
     for (size_t i = 0; i < body_messages.size() + 2; ++i) { // +2 for begin and end
         slot_indices.push_back(start_slot_index + static_cast<uint8_t>(i));
     }
-    
+
     // Create begin slot using MessageUtils
     message_slot_t begin_slot;
     if (!MessageUtils::createBatchBeginCmd(&begin_slot, slot_indices)) {
         return false;
     }
     batch_slots.push_back({start_slot_index, begin_slot});
-    
+
     // Add body slots
     for (size_t i = 0; i < body_messages.size(); ++i) {
         batch_slots.push_back({start_slot_index + 1 + static_cast<int>(i), body_messages[i]});
     }
-    
+
     // Create end slot using MessageUtils
     message_slot_t end_slot;
     if (!MessageUtils::createBatchEndCmd(&end_slot, slot_indices)) {
         return false;
     }
     batch_slots.push_back({start_slot_index + 1 + static_cast<int>(body_messages.size()), end_slot});
-    
+
     // Validate the created batch
     int begin_slot_idx, end_slot_idx;
     bool is_cmd, is_rsp;
     std::vector<std::pair<int, message_slot_t>> validated_body;
-    
+
     return confirm_batch_integrity(batch_slots, begin_slot_idx, end_slot_idx, is_cmd, is_rsp, validated_body);
 }
 
@@ -235,41 +237,41 @@ bool create_response_batch(const std::vector<message_slot_t>& body_messages,
                           uint8_t start_slot_index,
                           std::vector<std::pair<int, message_slot_t>>& batch_slots) {
     batch_slots.clear();
-    
+
     if (body_messages.empty() || start_slot_index + body_messages.size() + 1 >= 256) {
         return false; // Invalid parameters or would overflow uint8_t
     }
-    
+
     // Create slot index vector
     std::vector<uint8_t> slot_indices;
     for (size_t i = 0; i < body_messages.size() + 2; ++i) { // +2 for begin and end
         slot_indices.push_back(start_slot_index + static_cast<uint8_t>(i));
     }
-    
+
     // Create begin slot using MessageUtils
     message_slot_t begin_slot;
     if (!MessageUtils::createBatchBeginRsp(&begin_slot, slot_indices)) {
         return false;
     }
     batch_slots.push_back({start_slot_index, begin_slot});
-    
+
     // Add body slots
     for (size_t i = 0; i < body_messages.size(); ++i) {
         batch_slots.push_back({start_slot_index + 1 + static_cast<int>(i), body_messages[i]});
     }
-    
+
     // Create end slot using MessageUtils
     message_slot_t end_slot;
     if (!MessageUtils::createBatchEndRsp(&end_slot, slot_indices)) {
         return false;
     }
     batch_slots.push_back({start_slot_index + 1 + static_cast<int>(body_messages.size()), end_slot});
-    
+
     // Validate the created batch
     int begin_slot_idx, end_slot_idx;
     bool is_cmd, is_rsp;
     std::vector<std::pair<int, message_slot_t>> validated_body;
-    
+
     return confirm_batch_integrity(batch_slots, begin_slot_idx, end_slot_idx, is_cmd, is_rsp, validated_body);
 }
 
@@ -283,15 +285,15 @@ bool run_batch_integrity_tests() {
     {
         total_tests++;
         std::cout << "Testing command batch creation..." << std::endl;
-        
+
         std::vector<message_slot_t> body_messages(3);
         MessageUtils::createMallocCmd(&body_messages[0], 1024);
         MessageUtils::createFreeCmd(&body_messages[1], 0x12345678);
         MessageUtils::createQueryDeviceCmd(&body_messages[2]);
-        
+
         std::vector<std::pair<int, message_slot_t>> batch_slots;
         bool result = create_command_batch(body_messages, 10, batch_slots);
-        
+
         if (result && batch_slots.size() == 5) { // begin + 3 body + end
             std::cout << "✓ Command batch creation test passed" << std::endl;
             tests_passed++;
@@ -304,13 +306,13 @@ bool run_batch_integrity_tests() {
     {
         total_tests++;
         std::cout << "Testing response batch creation..." << std::endl;
-        
+
         std::vector<message_slot_t> body_messages(1);
         MessageUtils::createPing(&body_messages[0], 12345);
-        
+
         std::vector<std::pair<int, message_slot_t>> batch_slots;
         bool result = create_response_batch(body_messages, 20, batch_slots);
-        
+
         if (result && batch_slots.size() == 3) { // begin + 1 body + end
             std::cout << "✓ Response batch creation test passed" << std::endl;
             tests_passed++;
@@ -323,11 +325,11 @@ bool run_batch_integrity_tests() {
     {
         total_tests++;
         std::cout << "Testing empty batch creation..." << std::endl;
-        
+
         std::vector<message_slot_t> body_messages;
         std::vector<std::pair<int, message_slot_t>> batch_slots;
         bool result = create_command_batch(body_messages, 0, batch_slots);
-        
+
         if (!result) {
             std::cout << "✓ Empty batch creation test passed" << std::endl;
             tests_passed++;
@@ -337,7 +339,7 @@ bool run_batch_integrity_tests() {
     }
 
     std::cout << "\nTest Results: " << tests_passed << "/" << total_tests << " tests passed" << std::endl;
-    
+
     if (tests_passed == total_tests) {
         std::cout << "✅ All tests passed!" << std::endl;
         return true;
@@ -348,49 +350,49 @@ bool run_batch_integrity_tests() {
 }
 
 bool tbird_resp_wait(std::vector<std::pair<int, message_slot_t>> &waiting_batch, std::unique_ptr<DataTransferEngineReadBase> &rd_channel, std::vector<std::pair<int, message_slot_t>> &body_slots, std::vector<std::pair<int, message_slot_t>> &response_batch){
-        
+
         // Step 2: Wait for and validate malloc response batch
         bool response_received = false;
-        
+
         for (int timeout = 0; timeout < 50 && !response_received; ++timeout) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            
+
             response_batch.clear();
             for (const auto& [slot_index, _] : waiting_batch) {
                 message_slot_t slot;
                 if (MailboxUtils::readD2HMessage(*rd_channel, slot_index, &slot)) {
                     if (slot.msg_id != MSG_INVALID) {
                         response_batch.push_back({slot_index, slot});
-                        std::cout << "Peeked response in slot " << slot_index 
+                        std::cout << "Peeked response in slot " << slot_index
                                  << " with message ID " << MessageUtils::getMessageIdString(slot.msg_id) << std::endl;
                     }
                 }
             }
-            
+
             int begin_slot, end_slot;
             bool is_cmd, is_rsp;
-            
+
             if (confirm_batch_integrity(response_batch, begin_slot, end_slot, is_cmd, is_rsp, body_slots)) {
                 if (is_rsp && !is_cmd) {
                     std::cout << "✓ Valid malloc response batch received!" << std::endl;
-                    
+
                     std::cout << "\n=== MALLOC RESPONSE BATCH ===" << std::endl;
                     for (const auto& [slot_index, slot] : response_batch) {
                         std::cout << "\n--- Response Slot " << slot_index << " ---" << std::endl;
                         MessageUtils::printMessageSlot(&slot);
                     }
                     std::cout << "============================\n" << std::endl;
-                    
+
                     response_received = true;
                     break;
                 }
             }
-            
+
             if (timeout % 10 == 0) {
                 std::cout << "Timeout " << timeout << ": Still waiting for malloc response..." << std::endl;
             }
         }
-        
+
         if (!response_received) {
             std::cerr << "Error: Malloc request timed out" << std::endl;
             return false;
@@ -398,3 +400,4 @@ bool tbird_resp_wait(std::vector<std::pair<int, message_slot_t>> &waiting_batch,
         return true;
 }
 
+#endif

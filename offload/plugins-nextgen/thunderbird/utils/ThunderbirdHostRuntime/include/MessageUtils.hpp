@@ -1,3 +1,5 @@
+#ifndef THUNDERBIRD_MESSAGE_UTILS_HPP
+#define THUNDERBIRD_MESSAGE_UTILS_HPP
 #pragma once
 
 // include message payload definitions and types they depend on
@@ -63,9 +65,9 @@ inline const char* getErrorCodeString(error_code_t error) {
         case ERR_NOT_FOUND: return "ERR_NOT_FOUND";
         case ERR_PERMISSION: return "ERR_PERMISSION";
         case ERR_IO: return "ERR_IO";
-        case ERR_BEGIN_RECEIVED_BUT_CURRENT_BATCH_STILL_PROCESSING: 
+        case ERR_BEGIN_RECEIVED_BUT_CURRENT_BATCH_STILL_PROCESSING:
             return "ERR_BEGIN_RECEIVED_BUT_CURRENT_BATCH_STILL_PROCESSING";
-        case ERR_END_RECEIVED_BUT_NO_BATCH_TO_END: 
+        case ERR_END_RECEIVED_BUT_NO_BATCH_TO_END:
             return "ERR_END_RECEIVED_BUT_NO_BATCH_TO_END";
         case ERR_INVALID_BATCH_STATE: return "ERR_INVALID_BATCH_STATE";
         case ERR_END_CMD_MISMATCHES_BEGIN: return "ERR_END_CMD_MISMATCHES_BEGIN";
@@ -151,7 +153,7 @@ inline void printQueryDeviceCmd(const query_device_cmd_t* payload) {
 inline void printQueryDeviceRsp(const query_device_rsp_t* payload) {
     std::cout << "  Status: " << getErrorCodeString(payload->status) << " (" << payload->status << ")\n";
     std::cout << "  Device Info:\n";
-    std::cout << "    Compute Capability: " << payload->device_info.compute_capability_major 
+    std::cout << "    Compute Capability: " << payload->device_info.compute_capability_major
               << "." << payload->device_info.compute_capability_minor << "\n";
     std::cout << "    Max Threads Per Block: " << payload->device_info.max_threads_per_block << "\n";
     std::cout << "    Max Blocks Per Multiprocessor: " << payload->device_info.max_blocks_per_multiprocessor << "\n";
@@ -247,12 +249,12 @@ inline void printMemoryStatusRsp(const memory_status_rsp_t* payload) {
 inline void printRawData(const uint8_t* data, uint32_t length) {
     const uint32_t max_display = std::min(length, static_cast<uint32_t>(32));
     std::cout << "  Raw Data (" << length << " bytes): ";
-    
+
     for (uint32_t i = 0; i < max_display; ++i) {
         std::cout << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(data[i]);
         if (i < max_display - 1) std::cout << " ";
     }
-    
+
     if (length > max_display) {
         std::cout << " ...";
     }
@@ -301,13 +303,13 @@ inline void printMessagePayload(const message_slot_t* slot) {
 
     // Validate length doesn't exceed available data
     if (slot->length > MESSAGE_SLOT_DATA_SIZE) {
-        std::cout << "  ERROR: payload length (" << slot->length 
+        std::cout << "  ERROR: payload length (" << slot->length
                   << ") exceeds maximum (" << MESSAGE_SLOT_DATA_SIZE << ")\n";
         return;
     }
 
     const uint8_t* payload_data = slot->data;
-    
+
     switch (slot->msg_id) {
         case MSG_CMD_MALLOC:
             if (slot->length >= sizeof(malloc_cmd_t)) {
@@ -316,7 +318,7 @@ inline void printMessagePayload(const message_slot_t* slot) {
                 std::cout << "  ERROR: insufficient data for malloc_cmd_t\n";
             }
             break;
-            
+
         case MSG_RSP_MALLOC:
             if (slot->length >= sizeof(malloc_rsp_t)) {
                 printMallocRsp(reinterpret_cast<const malloc_rsp_t*>(payload_data));
@@ -324,7 +326,7 @@ inline void printMessagePayload(const message_slot_t* slot) {
                 std::cout << "  ERROR: insufficient data for malloc_rsp_t\n";
             }
             break;
-            
+
         case MSG_CMD_FREE:
             if (slot->length >= sizeof(free_cmd_t)) {
                 printFreeCmd(reinterpret_cast<const free_cmd_t*>(payload_data));
@@ -332,7 +334,7 @@ inline void printMessagePayload(const message_slot_t* slot) {
                 std::cout << "  ERROR: insufficient data for free_cmd_t\n";
             }
             break;
-            
+
         case MSG_RSP_FREE:
             if (slot->length >= sizeof(free_rsp_t)) {
                 printFreeRsp(reinterpret_cast<const free_rsp_t*>(payload_data));
@@ -340,7 +342,7 @@ inline void printMessagePayload(const message_slot_t* slot) {
                 std::cout << "  ERROR: insufficient data for free_rsp_t\n";
             }
             break;
-            
+
         case MSG_CMD_LAUNCH:
             if (slot->length >= sizeof(launch_cmd_t)) {
                 printLaunchCmd(reinterpret_cast<const launch_cmd_t*>(payload_data));
@@ -348,7 +350,7 @@ inline void printMessagePayload(const message_slot_t* slot) {
                 std::cout << "  ERROR: insufficient data for launch_cmd_t\n";
             }
             break;
-            
+
         case MSG_RSP_LAUNCH:
             if (slot->length >= sizeof(launch_rsp_t)) {
                 printLaunchRsp(reinterpret_cast<const launch_rsp_t*>(payload_data));
@@ -356,7 +358,7 @@ inline void printMessagePayload(const message_slot_t* slot) {
                 std::cout << "  ERROR: insufficient data for launch_rsp_t\n";
             }
             break;
-            
+
         case MSG_PING:
         case MSG_PONG:
             if (slot->length >= sizeof(ping_t)) {
@@ -365,7 +367,7 @@ inline void printMessagePayload(const message_slot_t* slot) {
                 std::cout << "  ERROR: insufficient data for ping_t\n";
             }
             break;
-            
+
         case MSG_CMD_QUERY_DEVICE:
             if (slot->length >= sizeof(query_device_cmd_t)) {
                 printQueryDeviceCmd(reinterpret_cast<const query_device_cmd_t*>(payload_data));
@@ -373,7 +375,7 @@ inline void printMessagePayload(const message_slot_t* slot) {
                 std::cout << "  ERROR: insufficient data for query_device_cmd_t\n";
             }
             break;
-            
+
         case MSG_RSP_QUERY_DEVICE:
             if (slot->length >= sizeof(query_device_rsp_t)) {
                 printQueryDeviceRsp(reinterpret_cast<const query_device_rsp_t*>(payload_data));
@@ -381,7 +383,7 @@ inline void printMessagePayload(const message_slot_t* slot) {
                 std::cout << "  ERROR: insufficient data for query_device_rsp_t\n";
             }
             break;
-            
+
         case MSG_CMD_BEGIN_BATCH:
             if (slot->length >= sizeof(batch_begin_cmd_t)) {
                 printBatchBeginCmd(reinterpret_cast<const batch_begin_cmd_t*>(payload_data));
@@ -389,7 +391,7 @@ inline void printMessagePayload(const message_slot_t* slot) {
                 std::cout << "  ERROR: insufficient data for batch_begin_cmd_t\n";
             }
             break;
-            
+
         case MSG_CMD_END_BATCH:
             if (slot->length >= sizeof(batch_end_cmd_t)) {
                 printBatchEndCmd(reinterpret_cast<const batch_end_cmd_t*>(payload_data));
@@ -397,7 +399,7 @@ inline void printMessagePayload(const message_slot_t* slot) {
                 std::cout << "  ERROR: insufficient data for batch_end_cmd_t\n";
             }
             break;
-            
+
         case MSG_RSP_BEGIN_BATCH:
             if (slot->length >= sizeof(batch_begin_rsp_t)) {
                 printBatchBeginRsp(reinterpret_cast<const batch_begin_rsp_t*>(payload_data));
@@ -405,7 +407,7 @@ inline void printMessagePayload(const message_slot_t* slot) {
                 std::cout << "  ERROR: insufficient data for batch_begin_rsp_t\n";
             }
             break;
-            
+
         case MSG_RSP_END_BATCH:
             if (slot->length >= sizeof(batch_end_rsp_t)) {
                 printBatchEndRsp(reinterpret_cast<const batch_end_rsp_t*>(payload_data));
@@ -413,7 +415,7 @@ inline void printMessagePayload(const message_slot_t* slot) {
                 std::cout << "  ERROR: insufficient data for batch_end_rsp_t\n";
             }
             break;
-            
+
         case MSG_INTERNAL_INVALIDATE_SLOTS:
             if (slot->length >= sizeof(internal_invalidate_slots_cmd_t)) {
                 printInternalInvalidateSlots(reinterpret_cast<const internal_invalidate_slots_cmd_t*>(payload_data));
@@ -421,7 +423,7 @@ inline void printMessagePayload(const message_slot_t* slot) {
                 std::cout << "  ERROR: insufficient data for internal_invalidate_slots_cmd_t\n";
             }
             break;
-            
+
         case MSG_CMD_TRANSFER_BEGIN:
         case MSG_CMD_TRANSFER_FINISHED:
         case MSG_RSP_TRANSFER_BEGIN:
@@ -443,10 +445,10 @@ inline void printMessageSlot(const message_slot_t* slot) {
         std::cout << "ERROR: null message slot\n";
         return;
     }
-    
+
     MessageCategory category = classifyMessage(slot->msg_id);
     const char* category_str = "";
-    
+
     switch (category) {
         case MessageCategory::COMMAND: category_str = "COMMAND"; break;
         case MessageCategory::RESPONSE: category_str = "RESPONSE"; break;
@@ -455,17 +457,17 @@ inline void printMessageSlot(const message_slot_t* slot) {
         case MessageCategory::VENDOR: category_str = "VENDOR"; break;
         case MessageCategory::UNKNOWN: category_str = "UNKNOWN"; break;
     }
-    
+
     std::cout << "=== MESSAGE SLOT ===\n";
-    std::cout << "Message ID: " << getMessageIdString(slot->msg_id) 
+    std::cout << "Message ID: " << getMessageIdString(slot->msg_id)
               << " (" << slot->msg_id << ")\n";
     std::cout << "Category: " << category_str << "\n";
     std::cout << "Length: " << slot->length << " bytes\n";
     std::cout << "Checksum: 0x" << std::hex << slot->checksum << std::dec << "\n";
     std::cout << "Payload:\n";
-    
+
     printMessagePayload(slot);
-    
+
     std::cout << "==================\n";
 }
 
@@ -474,7 +476,7 @@ inline void printMessageSlot(const message_slot_t* slot) {
  */
 inline void initMessageSlot(message_slot_t* slot, message_id_t msg_id, uint32_t payload_size) {
     if (!slot) return;
-    
+
     std::memset(slot, 0, sizeof(message_slot_t));
     slot->msg_id = msg_id;
     slot->length = payload_size;
@@ -485,15 +487,15 @@ inline void initMessageSlot(message_slot_t* slot, message_id_t msg_id, uint32_t 
  */
 inline bool createMallocCmd(message_slot_t* slot, uint32_t size, uint32_t alignment = 8) {
     if (!slot || size == 0) return false;
-    
+
     malloc_cmd_t payload = {};
     payload.size = size;
     payload.alignment = alignment;
     payload.reserved = 0;
-    
+
     initMessageSlot(slot, MSG_CMD_MALLOC, sizeof(malloc_cmd_t));
     std::memcpy(slot->data, &payload, sizeof(malloc_cmd_t));
-    
+
     return true;
 }
 
@@ -502,27 +504,27 @@ inline bool createMallocCmd(message_slot_t* slot, uint32_t size, uint32_t alignm
  */
 inline bool createFreeCmd(message_slot_t* slot, uint64_t address) {
     if (!slot || address == 0) return false;
-    
+
     free_cmd_t payload = {};
     payload.address = address;
     payload.reserved = 0;
-    
+
     initMessageSlot(slot, MSG_CMD_FREE, sizeof(free_cmd_t));
     std::memcpy(slot->data, &payload, sizeof(free_cmd_t));
-    
+
     return true;
 }
 
 /**
  * @brief Create launch command message
  */
-inline bool createLaunchCmd(message_slot_t* slot, 
+inline bool createLaunchCmd(message_slot_t* slot,
                            uint64_t kernel_address,
                            uint32_t grid_x, uint32_t grid_y, uint32_t grid_z,
                            uint32_t block_x, uint32_t block_y, uint32_t block_z,
                            uint32_t shared_mem_size = 0) {
     if (!slot || kernel_address == 0) return false;
-    
+
     launch_cmd_t payload = {};
     payload.kernel_address = kernel_address;
     payload.grid_x = grid_x;
@@ -533,10 +535,10 @@ inline bool createLaunchCmd(message_slot_t* slot,
     payload.block_z = block_z;
     payload.shared_mem_size = shared_mem_size;
     payload.reserved = 0;
-    
+
     initMessageSlot(slot, MSG_CMD_LAUNCH, sizeof(launch_cmd_t));
     std::memcpy(slot->data, &payload, sizeof(launch_cmd_t));
-    
+
     return true;
 }
 
@@ -545,14 +547,14 @@ inline bool createLaunchCmd(message_slot_t* slot,
  */
 inline bool createQueryDeviceCmd(message_slot_t* slot, uint32_t query_flags = 0xFFFFFFFF) {
     if (!slot) return false;
-    
+
     query_device_cmd_t payload = {};
     payload.query_flags = query_flags;
     payload.reserved = 0;
-    
+
     initMessageSlot(slot, MSG_CMD_QUERY_DEVICE, sizeof(query_device_cmd_t));
     std::memcpy(slot->data, &payload, sizeof(query_device_cmd_t));
-    
+
     return true;
 }
 
@@ -561,15 +563,15 @@ inline bool createQueryDeviceCmd(message_slot_t* slot, uint32_t query_flags = 0x
  */
 inline bool createBatchBeginCmd(message_slot_t* slot, const std::vector<uint8_t>& batch_slots) {
     if (!slot || batch_slots.empty() || batch_slots.size() > MAX_BATCH_SLOTS) return false;
-    
+
     batch_begin_cmd_t payload = {};
     payload.slot_count = static_cast<uint32_t>(batch_slots.size());
     std::memcpy(payload.batch_slots, batch_slots.data(), batch_slots.size());
     payload.reserved = 0;
-    
+
     initMessageSlot(slot, MSG_CMD_BEGIN_BATCH, sizeof(batch_begin_cmd_t));
     std::memcpy(slot->data, &payload, sizeof(batch_begin_cmd_t));
-    
+
     return true;
 }
 
@@ -578,15 +580,15 @@ inline bool createBatchBeginCmd(message_slot_t* slot, const std::vector<uint8_t>
  */
 inline bool createBatchEndCmd(message_slot_t* slot, const std::vector<uint8_t>& batch_slots) {
     if (!slot || batch_slots.empty() || batch_slots.size() > MAX_BATCH_SLOTS) return false;
-    
+
     batch_end_cmd_t payload = {};
     payload.slot_count = static_cast<uint32_t>(batch_slots.size());
     std::memcpy(payload.batch_slots, batch_slots.data(), batch_slots.size());
     payload.reserved = 0;
-    
+
     initMessageSlot(slot, MSG_CMD_END_BATCH, sizeof(batch_end_cmd_t));
     std::memcpy(slot->data, &payload, sizeof(batch_end_cmd_t));
-    
+
     return true;
 }
 
@@ -595,15 +597,15 @@ inline bool createBatchEndCmd(message_slot_t* slot, const std::vector<uint8_t>& 
  */
 inline bool createBatchBeginRsp(message_slot_t* slot, const std::vector<uint8_t>& batch_slots) {
     if (!slot || batch_slots.empty() || batch_slots.size() > MAX_BATCH_SLOTS) return false;
-    
+
     batch_begin_rsp_t payload = {};
     payload.slot_count = static_cast<uint32_t>(batch_slots.size());
     std::memcpy(payload.batch_slots, batch_slots.data(), batch_slots.size());
     payload.reserved = 0;
-    
+
     initMessageSlot(slot, MSG_RSP_BEGIN_BATCH, sizeof(batch_begin_rsp_t));
     std::memcpy(slot->data, &payload, sizeof(batch_begin_rsp_t));
-    
+
     return true;
 }
 
@@ -612,15 +614,15 @@ inline bool createBatchBeginRsp(message_slot_t* slot, const std::vector<uint8_t>
  */
 inline bool createBatchEndRsp(message_slot_t* slot, const std::vector<uint8_t>& batch_slots) {
     if (!slot || batch_slots.empty() || batch_slots.size() > MAX_BATCH_SLOTS) return false;
-    
+
     batch_end_rsp_t payload = {};
     payload.slot_count = static_cast<uint32_t>(batch_slots.size());
     std::memcpy(payload.batch_slots, batch_slots.data(), batch_slots.size());
     payload.reserved = 0;
-    
+
     initMessageSlot(slot, MSG_RSP_END_BATCH, sizeof(batch_end_rsp_t));
     std::memcpy(slot->data, &payload, sizeof(batch_end_rsp_t));
-    
+
     return true;
 }
 
@@ -629,14 +631,14 @@ inline bool createBatchEndRsp(message_slot_t* slot, const std::vector<uint8_t>& 
  */
 inline bool createPing(message_slot_t* slot, uint32_t timestamp = 0) {
     if (!slot) return false;
-    
+
     ping_t payload = {};
     payload.timestamp = timestamp;
     payload.reserved = 0;
-    
+
     initMessageSlot(slot, MSG_PING, sizeof(ping_t));
     std::memcpy(slot->data, &payload, sizeof(ping_t));
-    
+
     return true;
 }
 
@@ -648,9 +650,10 @@ inline bool extractPayload(const message_slot_t* slot, T* payload) {
     if (!slot || !payload || slot->length < sizeof(T)) {
         return false;
     }
-    
+
     std::memcpy(payload, slot->data, sizeof(T));
     return true;
 }
 
 } // namespace MessageUtils
+#endif

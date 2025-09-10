@@ -17,8 +17,6 @@ endif()
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/utils/ThunderbirdHostRuntime")
   add_subdirectory(utils/ThunderbirdHostRuntime)
   target_link_libraries(omptarget.rtl.thunderbird PRIVATE ThunderbirdHostRuntime)
-  target_include_directories(omptarget.rtl.thunderbird PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/utils/ThunderbirdHostRuntime)
 else()
   message(FATAL_ERROR "Cannot find thunderbird/utils/ThunderbirdHostRuntime libary")
 endif()
