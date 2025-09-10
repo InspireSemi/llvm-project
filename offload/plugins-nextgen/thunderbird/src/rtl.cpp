@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <ffi.h>
 #include <string>
+#include <variant>
 #include <unordered_map>
 
 #include "Shared/Debug.h"
@@ -71,7 +72,17 @@ struct ResponseTypeVisitor {
    ResponseTypeVisitor() = default;
 
    template<typename T> void operator()(T & t) {}
-   template<> void operator()(launch_rsp_t & t) {}
+  template<> void operator()(launch_rsp_t & t){
+    if(!MessageUtils::extractPayload(slot, &t)){
+      std::cerr << "Launch extraction failed." << std::endl;
+    }
+    if(t.status == ERR_OK){
+      std::cout << "Launch returned successfully." << std::endl;
+    } else {
+      std::cerr << "Warning: Launch failed with status: "
+                << MessageUtils::getErrorCodeString(t.status) << std::endl;
+    }
+  }
    template<> void operator()(malloc_rsp_t & t) {
      is_malloc = true;
           if(!MessageUtils::extractPayload(slot, &t)){
@@ -100,6 +111,8 @@ struct ResponseTypeVisitor {
 
    bool is_malloc = false;
    const message_slot_t *slot;
+
+
 };
 
 response_types process(ResponseTypeVisitor & rtv, response_types & rt, message_slot_t const *slot) {
