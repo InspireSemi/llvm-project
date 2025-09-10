@@ -100,7 +100,7 @@ struct ResponseTypeVisitor {
 };
 
 response_types process(ResponseTypeVisitor & rtv, response_types & rt, message_slot_t const *slot) {
-   rtv.slot = slot;	
+   rtv.slot = slot;
    std::visit(rtv, rt);
    return rt;
 }
@@ -377,7 +377,7 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
       }
       std::vector<std::pair<int, message_slot_t>> respSlots;
       std::vector<std::pair<int, message_slot_t>> respBatch;
-      if(!tbird_resp_wait(malloc_batch, rdChannel, respSlots, respBatch)){
+      if(!::tbird_resp_wait(malloc_batch, rdChannel, respSlots, respBatch)){
             return nullptr;
       }
 
@@ -427,8 +427,8 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
      if (!create_command_batch(free_batch_body, 0, free_batch)) {
             std::cerr << "Error: Failed to create free batch" << std::endl;
             return false;
-    }    
-    
+    }
+
     for(const auto& [slot_index, _] : free_batch){
       MailboxUtils::clearD2HSlot(*wrChannel, slot_index);
     }
@@ -440,7 +440,7 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     }
     std::vector<std::pair<int, message_slot_t>> respSlots;
     std::vector<std::pair<int, message_slot_t>> respBatch;
-    if(!tbird_resp_wait(free_batch, rdChannel, respSlots, respBatch)){
+    if(!::tbird_resp_wait(free_batch, rdChannel, respSlots, respBatch)){
 	    return false;
     }
 
