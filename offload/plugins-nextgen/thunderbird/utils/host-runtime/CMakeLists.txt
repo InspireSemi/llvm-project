@@ -12,3 +12,4 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 #set(CMAKE_CXX_COMPILER "clang++" CACHE STRING "" FORCE)
 
 add_subdirectory(DataTransferEngine)
+add_subdirectory(ThunderbirdHostRuntime)
