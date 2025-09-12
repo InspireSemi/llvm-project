@@ -190,10 +190,15 @@ struct ThunderbirdDeviceImageTy : public DeviceImageTy {
   /// Getter and setter for the dynamic library.
   DynamicLibrary &getDynamicLibrary() { return DynLib; }
   void setDynamicLibrary(const DynamicLibrary &Lib) { DynLib = Lib; }
+  uint64_t &getBaseImageAddress() { return TBirdImageAddress; }
+  void setBaseImageAddress(const uint64_t &Address) { TBirdImageAddress = Address; }
 
 private:
   /// The dynamic library that loaded the image.
   DynamicLibrary DynLib;
+
+  /// The Thunderbird-side address containing the image
+  uint64_t TBirdImageAddress;
 };
 
 /// Class implementing the device functionalities for Thunderbird.
@@ -266,8 +271,11 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
   /// TODO: Thunderbird: free any latent device memory
   Error unloadBinaryImpl(DeviceImageTy *Image) override {
     auto Elf = reinterpret_cast<ThunderbirdDeviceImageTy *>(Image);
-    DynamicLibrary::closeLibrary(Elf->getDynamicLibrary());
+    
+    free((void *) Elf->getBaseImageAddress(), TARGET_ALLOC_DEFAULT);
+    
     Plugin.free(Elf);
+
     return Plugin::success();
   }
 
@@ -362,7 +370,8 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
         std::cerr << "Error: Failed to write flat binary to device memory (written=" << written << ")" << std::endl;
       //  return false;
     }
-  
+ 
+    Image->setBaseImageAddress(ImageLoc);
     return Image;
   }
 
