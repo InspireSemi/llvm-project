@@ -14,11 +14,11 @@ else()
   message(FATAL_ERROR "Cannot find thunderbird/utils/host-runtime/DataTransferEngine libary")
 endif()
 
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/utils/ThunderbirdHostRuntime")
-  add_subdirectory(utils/ThunderbirdHostRuntime)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/utils/host-runtime/ThunderbirdHostRuntime")
+  add_subdirectory(utils/host-runtime/ThunderbirdHostRuntime)
   target_link_libraries(omptarget.rtl.thunderbird PRIVATE ThunderbirdHostRuntime)
 else()
-  message(FATAL_ERROR "Cannot find thunderbird/utils/ThunderbirdHostRuntime libary")
+  message(FATAL_ERROR "Cannot find thunderbird/utils/host-runtime/ThunderbirdHostRuntime libary")
 endif()
 
 
