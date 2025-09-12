@@ -331,11 +331,12 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
      std::vector<message_slot_t> malloc_batch_body(1);
       if (!MessageUtils::createMallocCmd(&malloc_batch_body[0], Image->getSize())) {
             std::cerr << "Error: Failed to create malloc command" << std::endl;
-           // return nullptr;
+           return Plugin::error(ErrorCode::UNKNOWN, "Couldn't make a malloc message.");
       }
       std::vector<std::pair<int, message_slot_t>> malloc_batch;
       if (!create_command_batch(malloc_batch_body, 0, malloc_batch)) {
             std::cerr << "Error: Failed to create free batch" << std::endl;
+           return Plugin::error(ErrorCode::UNKNOWN, "Couldn't make a malloc batch.");
             //return nullptr;
       }
 
@@ -344,7 +345,8 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
       }
       for (const auto& [slot_index, slot] : malloc_batch) {
             if (!MailboxUtils::writeH2DMessage(*wrChannel, slot_index, &slot)) {
-                std::cerr << "Error: Failed to write free batch slot " << slot_index << std::endl;
+                std::cerr << "Error: Failed to write malloc batch slot " << slot_index << std::endl;
+           return Plugin::error(ErrorCode::UNKNOWN, "Couldn't write malloc batch to slot.");
              //   return nullptr;
             }
       }
@@ -352,6 +354,7 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
       std::vector<std::pair<int, message_slot_t>> respBatch;
       if(!tbird_resp_wait(malloc_batch, rdChannel, respSlots, respBatch)){
            // return nullptr;
+           return Plugin::error(ErrorCode::UNKNOWN, "Getting a response back did not work.");
       }
 
       std::map<uint64_t, response_types> response_lut = {
@@ -381,6 +384,7 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     int64_t written = wrChannel->transfer(ImageLoc - IVSHMEM_BASE_ADDRESS, TgtImage->ImageStart, Image->getSize());
     if (written != static_cast<int64_t>(Image->getSize())) {
         std::cerr << "Error: Failed to write flat binary to device memory (written=" << written << ")" << std::endl;
+           return Plugin::error(ErrorCode::UNKNOWN, "Couldn't write Image to device memory.");
       //  return false;
     }
  
