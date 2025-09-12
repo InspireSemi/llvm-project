@@ -5,13 +5,13 @@ target_sources(omptarget.rtl.thunderbird PRIVATE src/rtl.cpp)
 
 # TODO: add logic to go find the ZephyrSDK
 
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/utils/DataTransferEngine")
-  add_subdirectory(utils/DataTransferEngine)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/utils/host-runtime/DataTransferEngine")
+  add_subdirectory(utils/host-runtime/DataTransferEngine)
   target_link_libraries(omptarget.rtl.thunderbird PRIVATE DataTransferEngine)
   target_include_directories(omptarget.rtl.thunderbird PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/utils/DataTransferEngine)
+    ${CMAKE_CURRENT_SOURCE_DIR}/utils/host-runtime/DataTransferEngine)
 else()
-  message(FATAL_ERROR "Cannot find thunderbird/utils/DataTransferEngine libary")
+  message(FATAL_ERROR "Cannot find thunderbird/utils/host-runtime/DataTransferEngine libary")
 endif()
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/utils/ThunderbirdHostRuntime")
