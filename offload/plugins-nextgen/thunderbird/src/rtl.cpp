@@ -58,6 +58,9 @@
 #define THUNDERBIRD_MAX_THREADS_XILINX 4
 #define THUNDERBIRD_MAX_THREADS_QEMU 64
 
+// IVSHMEM base address for the purposes of Thunderbird.
+constexpr uint64_t IVSHMEM_BASE_ADDRESS = 0x82000000000000ull;
+
 namespace llvm {
 namespace omp {
 namespace target {
@@ -296,49 +299,70 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
   Expected<DeviceImageTy *> loadBinaryImpl(const __tgt_device_image *TgtImage,
                                            int32_t ImageId) override {
     // Allocate and initialize the image object.
+    // Unclear where this allocation is happening.
+    // Given Plugin is genericpluginty, may be
+    // https://github.com/InspireSemi/llvm-project/blob/ff40aa09c34073806265cb98f58d5a3ab13f551b/offload/plugins-nextgen/common/include/PluginInterface.h#L1197
+    // This allocation seemingly does nothing to the card memory, looking at the
+    // CUDA workflow. This appears to be a host-side allocation.
     ThunderbirdDeviceImageTy *Image = Plugin.allocate<ThunderbirdDeviceImageTy>();
     new (Image) ThunderbirdDeviceImageTy(ImageId, *this, TgtImage);
+  
+     std::vector<message_slot_t> malloc_batch_body(1);
+      if (!MessageUtils::createMallocCmd(&malloc_batch_body[0], Image->getSize())) {
+            std::cerr << "Error: Failed to create malloc command" << std::endl;
+           // return nullptr;
+      }
+      std::vector<std::pair<int, message_slot_t>> malloc_batch;
+      if (!create_command_batch(malloc_batch_body, 0, malloc_batch)) {
+            std::cerr << "Error: Failed to create free batch" << std::endl;
+            //return nullptr;
+      }
 
-    // Create a temporary file.
-    char TmpFileName[] = "/tmp/tmpfile_XXXXXX";
-    int TmpFileFd = mkstemp(TmpFileName);
-    if (TmpFileFd == -1)
-      return Plugin::error(ErrorCode::HOST_IO,
-                           "failed to create tmpfile for loading target image");
+      for(const auto& [slot_index, _] : malloc_batch){
+        MailboxUtils::clearD2HSlot(*wrChannel, slot_index);
+      }
+      for (const auto& [slot_index, slot] : malloc_batch) {
+            if (!MailboxUtils::writeH2DMessage(*wrChannel, slot_index, &slot)) {
+                std::cerr << "Error: Failed to write free batch slot " << slot_index << std::endl;
+             //   return nullptr;
+            }
+      }
+      std::vector<std::pair<int, message_slot_t>> respSlots;
+      std::vector<std::pair<int, message_slot_t>> respBatch;
+      if(!tbird_resp_wait(malloc_batch, rdChannel, respSlots, respBatch)){
+           // return nullptr;
+      }
 
-    // Open the temporary file.
-    FILE *TmpFile = fdopen(TmpFileFd, "wb");
-    if (!TmpFile)
-      return Plugin::error(ErrorCode::HOST_IO,
-                           "failed to open tmpfile %s for loading target image",
-                           TmpFileName);
+      std::map<uint64_t, response_types> response_lut = {
+        { MSG_RSP_LAUNCH, response_types{launch_rsp_t{}} },
+        { MSG_RSP_MALLOC, response_types{malloc_rsp_t{}} },
+        { MSG_RSP_FREE, response_types{free_rsp_t{}} }
+      };
 
-    // Write the image into the temporary file.
-    size_t Written = fwrite(Image->getStart(), Image->getSize(), 1, TmpFile);
-    if (Written != 1)
-      return Plugin::error(ErrorCode::HOST_IO,
-                           "failed to write target image to tmpfile %s",
-                           TmpFileName);
+      auto const response_lut_end = response_lut.end();
 
-    // Close the temporary file.
-    int Ret = fclose(TmpFile);
-    if (Ret)
-      return Plugin::error(ErrorCode::HOST_IO,
-                           "failed to close tmpfile %s with the target image",
-                           TmpFileName);
+      auto response_lut_itr = response_lut.begin();
 
-    // Load the temporary file as a dynamic library.
-    std::string ErrMsg;
-    DynamicLibrary DynLib = DynamicLibrary::getLibrary(TmpFileName, &ErrMsg);
+      ResponseTypeVisitor rtv{};
 
-    // Check if the loaded library is valid.
-    if (!DynLib.isValid())
-      return Plugin::error(ErrorCode::INVALID_BINARY,
-                           "failed to load target image: %s", ErrMsg.c_str());
-
-    // Save a reference of the image's dynamic library.
-    Image->setDynamicLibrary(DynLib);
-
+      malloc_rsp_t m_resp;
+      for( const auto& [slot_index, slot] : respSlots) {
+        response_lut_itr = response_lut.find(slot.msg_id);
+        if(response_lut_itr != response_lut_end) {
+          m_resp = std::get<malloc_rsp_t>(process(rtv, response_lut_itr->second, &slot));
+        }
+      }
+      uint64_t ImageLoc = (uint64_t) m_resp.address;
+      for (const auto& [clear_slot_idx, _] : respBatch) {
+            MailboxUtils::clearD2HSlot(*wrChannel, clear_slot_idx);
+      }
+      
+    int64_t written = wrChannel->transfer(ImageLoc - IVSHMEM_BASE_ADDRESS, TgtImage->ImageStart, Image->getSize());
+    if (written != static_cast<int64_t>(Image->getSize())) {
+        std::cerr << "Error: Failed to write flat binary to device memory (written=" << written << ")" << std::endl;
+      //  return false;
+    }
+  
     return Image;
   }
 
