@@ -137,7 +137,8 @@ struct ThunderbirdKernelTy : public GenericKernelTy {
 
   /// Initialize the kernel.
   Error initImpl(GenericDeviceTy &Device, DeviceImageTy &Image) override {
-    // Functions have zero size.
+  
+	  // Functions have zero size.
     GlobalTy Global(getName(), 0);
 
     // Get the metadata (address) of the kernel function.
@@ -156,7 +157,7 @@ struct ThunderbirdKernelTy : public GenericKernelTy {
     KernelEnvironment.Configuration.ExecMode = OMP_TGT_EXEC_MODE_GENERIC;
     KernelEnvironment.Configuration.MayUseNestedParallelism = /*Unknown=*/2;
     KernelEnvironment.Configuration.UseGenericStateMachine = /*Unknown=*/2;
-
+    
     return Plugin::success();
   }
 
@@ -206,12 +207,34 @@ struct ThunderbirdDeviceImageTy : public DeviceImageTy {
   uint64_t &getBaseImageAddress() { return TBirdImageAddress; }
   void setBaseImageAddress(const uint64_t &Address) { TBirdImageAddress = Address; }
 
+  void makeFuncTable(){
+    llvm::ArrayRef<llvm::offloading::EntryTy> Entries(
+      getTgtImage()->EntriesBegin, getTgtImage()->EntriesEnd);    
+    for (const auto &Entry : Entries) {
+      // TODO: Verify that this if statement checks for this entry being a function
+      if (Entry.Kind != object::OffloadKind::OFK_OpenMP || Entry.Size == 0 ||
+          !(Entry.Flags & OMP_DECLARE_TARGET_INDIRECT))
+        continue;
+
+      FuncTable[std::string(Entry.SymbolName)] = &Entry;
+
+  }
+  }
+    const llvm::offloading::EntryTy * getEntryForName(std::string &name){
+       return FuncTable[name];
+     }
+
 private:
   /// The dynamic library that loaded the image.
   DynamicLibrary DynLib;
 
   /// The Thunderbird-side address containing the image
   uint64_t TBirdImageAddress;
+
+
+  // Since the device won't have a mapping from name to function, 
+  // we have to. This is a way to do that. 
+  std::map<std::string, const llvm::offloading::EntryTy *> FuncTable; 
 };
 
 /// Class implementing the device functionalities for Thunderbird.
