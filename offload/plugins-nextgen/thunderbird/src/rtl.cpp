@@ -137,7 +137,7 @@ struct ThunderbirdKernelTy : public GenericKernelTy {
 
   /// Initialize the kernel.
   Error initImpl(GenericDeviceTy &Device, DeviceImageTy &Image) override {
-  
+
 	  // Functions have zero size.
     GlobalTy Global(getName(), 0);
 
@@ -157,37 +157,15 @@ struct ThunderbirdKernelTy : public GenericKernelTy {
     KernelEnvironment.Configuration.ExecMode = OMP_TGT_EXEC_MODE_GENERIC;
     KernelEnvironment.Configuration.MayUseNestedParallelism = /*Unknown=*/2;
     KernelEnvironment.Configuration.UseGenericStateMachine = /*Unknown=*/2;
-    
+
     return Plugin::success();
   }
 
-  /// Launch the kernel using the libffi.
   Error launchImpl(GenericDeviceTy &GenericDevice, uint32_t NumThreads[3],
                    uint32_t NumBlocks[3], KernelArgsTy &KernelArgs,
                    KernelLaunchParamsTy LaunchParams,
-                   AsyncInfoWrapperTy &AsyncInfoWrapper) const override {
-    // Create a vector of ffi_types, one per argument.
-    SmallVector<ffi_type *, 16> ArgTypes(KernelArgs.NumArgs, &ffi_type_pointer);
-    ffi_type **ArgTypesPtr = (ArgTypes.size()) ? &ArgTypes[0] : nullptr;
+                   AsyncInfoWrapperTy &AsyncInfoWrapper) const override;
 
-    // Prepare the cif structure before running the kernel function.
-    ffi_cif Cif;
-    ffi_status Status = ffi_prep_cif(&Cif, FFI_DEFAULT_ABI, KernelArgs.NumArgs,
-                                     &ffi_type_void, ArgTypesPtr);
-    if (Status != FFI_OK)
-      return Plugin::error(ErrorCode::UNKNOWN, "error in ffi_prep_cif: %d",
-                           Status);
-
-    // Call the kernel function through libffi.
-    long Return;
-    ffi_call(&Cif, Func, &Return, (void **)LaunchParams.Ptrs);
-
-    // ---------------------------------- TODO
-    // REPLACE WITH THUNDERBIRD LAUNCH LOGIC
-    // ---------------------------------------
-
-    return Plugin::success();
-  }
 
 private:
   /// The kernel function to execute.
@@ -209,7 +187,7 @@ struct ThunderbirdDeviceImageTy : public DeviceImageTy {
 
   void makeFuncTable(){
     llvm::ArrayRef<llvm::offloading::EntryTy> Entries(
-      getTgtImage()->EntriesBegin, getTgtImage()->EntriesEnd);    
+      getTgtImage()->EntriesBegin, getTgtImage()->EntriesEnd);
     for (const auto &Entry : Entries) {
       // TODO: Verify that this if statement checks for this entry being a function
       if (Entry.Size != 0)
@@ -231,9 +209,9 @@ private:
   uint64_t TBirdImageAddress;
 
 
-  // Since the device won't have a mapping from name to function, 
-  // we have to. This is a way to do that. 
-  std::map<std::string, const llvm::offloading::EntryTy *> FuncTable; 
+  // Since the device won't have a mapping from name to function,
+  // we have to. This is a way to do that.
+  std::map<std::string, const llvm::offloading::EntryTy *> FuncTable;
 };
 
 /// Class implementing the device functionalities for Thunderbird.
@@ -306,9 +284,9 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
   /// TODO: Thunderbird: free any latent device memory
   Error unloadBinaryImpl(DeviceImageTy *Image) override {
     auto Elf = reinterpret_cast<ThunderbirdDeviceImageTy *>(Image);
-    
+
     free((void *) Elf->getBaseImageAddress(), TARGET_ALLOC_DEFAULT);
-    
+
     Plugin.free(Elf);
 
     return Plugin::success();
@@ -349,7 +327,7 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     // CUDA workflow. This appears to be a host-side allocation.
     ThunderbirdDeviceImageTy *Image = Plugin.allocate<ThunderbirdDeviceImageTy>();
     new (Image) ThunderbirdDeviceImageTy(ImageId, *this, TgtImage);
-  
+
      std::vector<message_slot_t> malloc_batch_body(1);
       if (!MessageUtils::createMallocCmd(&malloc_batch_body[0], Image->getSize())) {
             std::cerr << "Error: Failed to create malloc command" << std::endl;
@@ -402,14 +380,14 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
       for (const auto& [clear_slot_idx, _] : respBatch) {
             MailboxUtils::clearD2HSlot(*wrChannel, clear_slot_idx);
       }
-      
+
     int64_t written = wrChannel->transfer(ImageLoc - IVSHMEM_BASE_ADDRESS, TgtImage->ImageStart, Image->getSize());
     if (written != static_cast<int64_t>(Image->getSize())) {
         std::cerr << "Error: Failed to write flat binary to device memory (written=" << written << ")" << std::endl;
            return Plugin::error(ErrorCode::UNKNOWN, "Couldn't write Image to device memory.");
       //  return false;
     }
- 
+
     Image->setBaseImageAddress(ImageLoc);
     return Image;
   }
@@ -649,6 +627,9 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
   }
   Error setDeviceHeapSize(uint64_t Value) override { return Plugin::success(); }
 
+  // FIXME: Need to either implement getters and setters for channels or confirm they can be public
+  std::unique_ptr<DataTransferEngineWriteBase> wrChannel;
+  std::unique_ptr<DataTransferEngineReadBase> rdChannel;
 private:
   /// Grid values for Thunderbird plugins.
   static constexpr GV ThunderbirdGridValues = {
@@ -662,34 +643,123 @@ private:
   };
 
   /// Thunderbird write and read channels
-  std::unique_ptr<DataTransferEngineWriteBase> wrChannel;
-  std::unique_ptr<DataTransferEngineReadBase> rdChannel;
   uint32_t MaxNumThreads = 0;
 };
+
+  Error ThunderbirdKernelTy::launchImpl(GenericDeviceTy &GenericDevice, uint32_t NumThreads[3],
+                 uint32_t NumBlocks[3], KernelArgsTy &KernelArgs,
+                 KernelLaunchParamsTy LaunchParams,
+                 AsyncInfoWrapperTy &AsyncInfoWrapper) const {
+
+  // Cast to tbrid device so we can access our methods
+  auto *TbirdDevice = static_cast<ThunderbirdDeviceTy *>(&GenericDevice);
+
+  // Allocate a buffer on device for kernel args
+  size_t ArgsSize = KernelArgs.NumArgs * sizeof(void *);
+  void *DeviceArgsPtr = nullptr;
+
+  if (ArgsSize > 0) {
+    DeviceArgsPtr = TbirdDevice->allocate(ArgsSize, nullptr, TARGET_ALLOC_DEVICE);
+    if (!DeviceArgsPtr) {
+      return Plugin::error(ErrorCode::OUT_OF_RESOURCES,
+                           "Failed to allocate device memory for kernel args");
+    }
+  }
+
+  // Copy args to device from host
+  if (ArgsSize > 0) {
+    if (auto Err = TbirdDevice->dataSubmitImpl(DeviceArgsPtr, LaunchParams.Ptrs,
+                                              ArgsSize, AsyncInfoWrapper)) {
+      // If the copy fails, we must clean up the memory we allocated.
+      TbirdDevice->free(DeviceArgsPtr, TARGET_ALLOC_DEVICE);
+      return Err;
+    }
+  }
+
+  // Prepare and send the launch command via the mailbox.
+  std::vector<message_slot_t> launch_batch_body(1);
+
+  // 'this->Func' should be addr of kernel
+  uint64_t kernel_device_addr = reinterpret_cast<uint64_t>(this->Func);
+  uint64_t args_device_addr = reinterpret_cast<uint64_t>(DeviceArgsPtr);
+
+  if (!MessageUtils::createLaunchCmd(&launch_batch_body[0],
+                                   kernel_device_addr,
+                                   args_device_addr,
+                                   NumBlocks[0],   // grid_x
+                                   NumBlocks[1],   // grid_y
+                                   NumBlocks[2],   // grid_z
+                                   NumThreads[0],  // block_x
+                                   NumThreads[1],  // block_y
+                                   NumThreads[2],  // block_z
+                                   0)) {           // shared_mem_size
+    TbirdDevice->free(DeviceArgsPtr, TARGET_ALLOC_DEVICE);
+    return Plugin::error(ErrorCode::UNKNOWN, "Failed to create launch command");
+  }
+
+  std::vector<std::pair<int, message_slot_t>> launch_batch;
+  if (!create_command_batch(launch_batch_body, 0, launch_batch)) {
+    TbirdDevice->free(DeviceArgsPtr, TARGET_ALLOC_DEVICE);
+    return Plugin::error(ErrorCode::UNKNOWN, "Failed to create launch batch");
+  }
+
+  for (const auto& [slot_index, slot] : launch_batch) {
+    if (!MailboxUtils::writeH2DMessage(*TbirdDevice->wrChannel, slot_index, &slot)) {
+        // TODO: Handle whatever errors we need to
+    }
+  }
+
+  // Wait for the kernel to finish execution.
+  std::vector<std::pair<int, message_slot_t>> respSlots;
+  std::vector<std::pair<int, message_slot_t>> respBatch;
+  if (!tbird_resp_wait(launch_batch, TbirdDevice->rdChannel, respSlots, respBatch)) {
+      TbirdDevice->free(DeviceArgsPtr, TARGET_ALLOC_DEVICE);
+      return Plugin::error(ErrorCode::UNKNOWN, "Device never responded to launch command.");
+  }
+
+  // Clean up & free the device-side argument buffer.
+  if (ArgsSize > 0) {
+    TbirdDevice->free(DeviceArgsPtr, TARGET_ALLOC_DEVICE);
+  }
+
+  return Plugin::success();
+}
 
 class ThunderbirdGlobalHandlerTy final : public GenericGlobalHandlerTy {
 public:
   Error getGlobalMetadataFromDevice(GenericDeviceTy &GenericDevice,
                                     DeviceImageTy &Image,
                                     GlobalTy &DeviceGlobal) override {
-    const char *GlobalName = DeviceGlobal.getName().data();
-    ThunderbirdDeviceImageTy &ThunderbirdImage =
-        static_cast<ThunderbirdDeviceImageTy &>(Image);
 
-    // Get dynamic library that has loaded the device image.
-    DynamicLibrary &DynLib = ThunderbirdImage.getDynamicLibrary();
+    auto &ThunderbirdImage = static_cast<ThunderbirdDeviceImageTy &>(Image);
+    uint64_t DeviceImageBase = ThunderbirdImage.getBaseImageAddress();
 
-    // Get the address of the symbol.
-    void *Addr = DynLib.getAddressOfSymbol(GlobalName);
-    if (Addr == nullptr) {
-      return Plugin::error(ErrorCode::NOT_FOUND, "failed to load global '%s'",
-                           GlobalName);
+    if (DeviceImageBase == 0) {
+      return Plugin::error(ErrorCode::UNINITIALIZED,
+                           "Device image base address is not set.");
     }
 
-    // Save the pointer to the symbol.
-    DeviceGlobal.setPtr(Addr);
+    // Get image data from host
+    const __tgt_device_image *TgtImage = ThunderbirdImage.getTgtImage();
+    const char *SymbolName = DeviceGlobal.getName().data();
 
-    return Plugin::success();
+    // Find entry for our symbol.
+    for (llvm::offloading::EntryTy *entry = TgtImage->EntriesBegin;
+         entry != TgtImage->EntriesEnd; ++entry) {
+
+      if (strcmp(entry->SymbolName, SymbolName) == 0) {
+        // Calc symbol offset within the image.
+        uint64_t symbol_offset = (uintptr_t)entry->Address - (uintptr_t)TgtImage->ImageStart;
+        uint64_t final_device_address = DeviceImageBase + symbol_offset;
+
+        // Save absolute device address.
+        DeviceGlobal.setPtr((void *)final_device_address);
+        return Plugin::success();
+      }
+    }
+
+    return Plugin::error(ErrorCode::NOT_FOUND, "failed to find global '%s' in the image entries",
+                         SymbolName);
   }
 };
 
