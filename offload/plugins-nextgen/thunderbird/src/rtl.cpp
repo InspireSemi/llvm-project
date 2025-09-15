@@ -31,6 +31,7 @@
 #include "llvm/Frontend/OpenMP/OMPDeviceConstants.h"
 #include "llvm/Frontend/OpenMP/OMPGridValues.h"
 #include "llvm/Support/DynamicLibrary.h"
+#include "llvm/BinaryFormat/ELF.h"
 
 // Thunderbird headers
 #include "DataTransferEngineFactory.hpp"
@@ -798,7 +799,7 @@ struct ThunderbirdPluginTy final : public GenericPluginTy {
 
   /// Get the ELF code to recognize the compatible binary images.
   uint16_t getMagicElfBits() const override {
-    return utils::elf::getTargetMachine();
+    return llvm::ELF::EM_RISCV;
   }
 
   /// This plugin does not support exchanging data between two devices.
@@ -808,6 +809,7 @@ struct ThunderbirdPluginTy final : public GenericPluginTy {
 
   /// All images (ELF-compatible) should be compatible with this plugin.
   Expected<bool> isELFCompatible(uint32_t, StringRef) const override {
+
     return true;
   }
 
