@@ -53,6 +53,7 @@ typedef struct __attribute__((packed)) {
 
 typedef struct __attribute__((packed)) {
     uint64_t kernel_address;
+    uint64_t args_address;
     uint32_t grid_x, grid_y, grid_z;
     uint32_t block_x, block_y, block_z;
     uint32_t shared_mem_size;
@@ -193,7 +194,7 @@ static_assert(offsetof(free_rsp_t, status) == 0,
 
 static_assert(offsetof(launch_cmd_t, kernel_address) == 0,
               "launch_cmd_t.kernel_address not at expected offset 0");
-static_assert(offsetof(launch_cmd_t, grid_x) == 8,
+static_assert(offsetof(launch_cmd_t, grid_x) == 16,
               "launch_cmd_t.grid_x not at expected offset 8");
 
 static_assert(offsetof(launch_rsp_t, status) == 0,
@@ -306,8 +307,8 @@ _Static_assert(offsetof(free_rsp_t, status) == 0,
 
 _Static_assert(offsetof(launch_cmd_t, kernel_address) == 0,
                "launch_cmd_t.kernel_address not at expected offset 0");
-_Static_assert(offsetof(launch_cmd_t, grid_x) == 8,
-               "launch_cmd_t.grid_x not at expected offset 8");
+_Static_assert(offsetof(launch_cmd_t, grid_x) == 16,
+               "launch_cmd_t.grid_x not at expected offset 16");
 
 _Static_assert(offsetof(launch_rsp_t, status) == 0,
                "launch_rsp_t.status not at expected offset 0");
