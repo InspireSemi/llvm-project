@@ -212,8 +212,7 @@ struct ThunderbirdDeviceImageTy : public DeviceImageTy {
       getTgtImage()->EntriesBegin, getTgtImage()->EntriesEnd);    
     for (const auto &Entry : Entries) {
       // TODO: Verify that this if statement checks for this entry being a function
-      if (Entry.Kind != object::OffloadKind::OFK_OpenMP || Entry.Size == 0 ||
-          !(Entry.Flags & OMP_DECLARE_TARGET_INDIRECT))
+      if (Entry.Size != 0)
         continue;
 
       FuncTable[std::string(Entry.SymbolName)] = &Entry;
