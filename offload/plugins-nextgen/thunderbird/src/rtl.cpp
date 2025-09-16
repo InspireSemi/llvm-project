@@ -329,7 +329,12 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     ThunderbirdDeviceImageTy *Image = Plugin.allocate<ThunderbirdDeviceImageTy>();
     new (Image) ThunderbirdDeviceImageTy(ImageId, *this, TgtImage);
 
-     std::vector<message_slot_t> malloc_batch_body(1);
+    std::cout << "=== TRANSFER DEBUG ===" << std::endl;
+    std::cout << "ImageLoc: 0x" << std::hex << ImageLoc << std::endl;
+    std::cout << "Transfer offset: 0x" << std::hex << (ImageLoc - IVSHMEM_BASE_ADDRESS) << std::endl;
+    std::cout << "Image size: " << std::dec << Image->getSize() << std::endl;
+    std::cout << "Required file size: " << std::dec << ((ImageLoc - IVSHMEM_BASE_ADDRESS) + Image->getSize()) << std::endl;
+    std::vector<message_slot_t> malloc_batch_body(1);
       if (!MessageUtils::createMallocCmd(&malloc_batch_body[0], Image->getSize())) {
             std::cerr << "Error: Failed to create malloc command" << std::endl;
            return Plugin::error(ErrorCode::UNKNOWN, "Couldn't make a malloc message.");
@@ -338,7 +343,6 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
       if (!create_command_batch(malloc_batch_body, 0, malloc_batch)) {
             std::cerr << "Error: Failed to create free batch" << std::endl;
            return Plugin::error(ErrorCode::UNKNOWN, "Couldn't make a malloc batch.");
-            //return nullptr;
       }
 
       for(const auto& [slot_index, _] : malloc_batch){
@@ -348,7 +352,6 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
             if (!MailboxUtils::writeH2DMessage(*wrChannel, slot_index, &slot)) {
                 std::cerr << "Error: Failed to write malloc batch slot " << slot_index << std::endl;
            return Plugin::error(ErrorCode::UNKNOWN, "Couldn't write malloc batch to slot.");
-             //   return nullptr;
             }
       }
       std::vector<std::pair<int, message_slot_t>> respSlots;
