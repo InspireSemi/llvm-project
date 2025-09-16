@@ -753,11 +753,18 @@ public:
     // Find entry for our symbol.
     for (llvm::offloading::EntryTy *entry = TgtImage->EntriesBegin;
          entry != TgtImage->EntriesEnd; ++entry) {
-
       if (strcmp(entry->SymbolName, SymbolName) == 0) {
         // Calc symbol offset within the image.
         uint64_t symbol_offset = (uintptr_t)entry->Address - (uintptr_t)TgtImage->ImageStart;
         uint64_t final_device_address = DeviceImageBase + symbol_offset;
+
+        std::cout << "========> Symbol Information <============= " << std::endl;
+        std::cout << "Symbol: " << SymbolName << std::endl;
+        std::cout << "entry->Address: 0x" << std::hex << (uintptr_t)entry->Address << std::endl;
+        std::cout << "TgtImage->ImageStart: 0x" << std::hex << (uintptr_t)TgtImage->ImageStart << std::endl;
+        std::cout << "symbol_offset: 0x" << std::hex << symbol_offset << std::endl;
+        std::cout << "DeviceImageBase: 0x" << std::hex << DeviceImageBase << std::endl;
+        std::cout << "final_device_address: 0x" << std::hex << final_device_address << std::endl;
 
         // Save absolute device address.
         DeviceGlobal.setPtr((void *)final_device_address);
