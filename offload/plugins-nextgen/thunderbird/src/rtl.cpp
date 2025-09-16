@@ -329,11 +329,6 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     ThunderbirdDeviceImageTy *Image = Plugin.allocate<ThunderbirdDeviceImageTy>();
     new (Image) ThunderbirdDeviceImageTy(ImageId, *this, TgtImage);
 
-    std::cout << "=== TRANSFER DEBUG ===" << std::endl;
-    std::cout << "ImageLoc: 0x" << std::hex << ImageLoc << std::endl;
-    std::cout << "Transfer offset: 0x" << std::hex << (ImageLoc - IVSHMEM_BASE_ADDRESS) << std::endl;
-    std::cout << "Image size: " << std::dec << Image->getSize() << std::endl;
-    std::cout << "Required file size: " << std::dec << ((ImageLoc - IVSHMEM_BASE_ADDRESS) + Image->getSize()) << std::endl;
     std::vector<message_slot_t> malloc_batch_body(1);
       if (!MessageUtils::createMallocCmd(&malloc_batch_body[0], Image->getSize())) {
             std::cerr << "Error: Failed to create malloc command" << std::endl;
@@ -384,6 +379,13 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
       for (const auto& [clear_slot_idx, _] : respBatch) {
             MailboxUtils::clearD2HSlot(*wrChannel, clear_slot_idx);
       }
+
+    // BUG: Once bounds issue is fixed change this
+    std::cout << "=== TRANSFER DEBUG ===" << std::endl;
+    std::cout << "ImageLoc: 0x" << std::hex << ImageLoc << std::endl;
+    std::cout << "Transfer offset: 0x" << std::hex << (ImageLoc - IVSHMEM_BASE_ADDRESS) << std::endl;
+    std::cout << "Image size: " << std::dec << Image->getSize() << std::endl;
+    std::cout << "Required file size: " << std::dec << ((ImageLoc - IVSHMEM_BASE_ADDRESS) + Image->getSize()) << std::endl;
 
     int64_t written = wrChannel->transfer(ImageLoc - IVSHMEM_BASE_ADDRESS, TgtImage->ImageStart, Image->getSize());
     if (written != static_cast<int64_t>(Image->getSize())) {
