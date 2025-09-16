@@ -320,6 +320,7 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
   // TODO: use the Thunderbird API to load the implementation into memory
   Expected<DeviceImageTy *> loadBinaryImpl(const __tgt_device_image *TgtImage,
                                            int32_t ImageId) override {
+
     // Allocate and initialize the image object.
     // Unclear where this allocation is happening.
     // Given Plugin is genericpluginty, may be
@@ -329,6 +330,17 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     ThunderbirdDeviceImageTy *Image = Plugin.allocate<ThunderbirdDeviceImageTy>();
     new (Image) ThunderbirdDeviceImageTy(ImageId, *this, TgtImage);
 
+    uintptr_t min_addr = (uintptr_t)TgtImage->ImageStart;
+    for (auto *entry = TgtImage->EntriesBegin; entry != TgtImage->EntriesEnd; ++entry) {
+      if (entry->Size == 0) { // We found a function symbol
+        min_addr = std::min(min_addr, (uintptr_t)entry->Address);
+      }
+    }
+
+    size_t extra_bytes = (uintptr_t)TgtImage->ImageStart - min_addr;
+    size_t total_size = Image->getSize() + extra_bytes;
+    std::cout << "HEY KAE! WE SHOULD TRY LOADING " << total_size << " BYTES" << std::endl;
+    std::cout << "What we were loading before is only " << Image->getSize() << " BYTES " << std::endl;
     std::vector<message_slot_t> malloc_batch_body(1);
       if (!MessageUtils::createMallocCmd(&malloc_batch_body[0], Image->getSize())) {
             std::cerr << "Error: Failed to create malloc command" << std::endl;
