@@ -267,11 +267,11 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     }else{
       // Default to the full Thunderbird platform
       wrChannel = DataTransferEngineFactory::createWriteChannel(
-        DataTransferBackend::Thunderbird,
-        "/dev/null");
+        DataTransferBackend::ThunderbirdQEMU,
+        "/dev/shm/ivshmem");
       rdChannel = DataTransferEngineFactory::createReadChannel(
-        DataTransferBackend::Thunderbird,
-        "/dev/null");
+        DataTransferBackend::ThunderbirdQEMU,
+        "/dev/shm/ivshmem");
       MaxNumThreads = THUNDERBIRD_MAX_THREADS;
     }
 
