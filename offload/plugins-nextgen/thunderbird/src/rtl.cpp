@@ -341,6 +341,10 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     size_t total_size = Image->getSize() + extra_bytes;
     std::cout << "HEY KAE! WE SHOULD TRY LOADING " << total_size << " BYTES" << std::endl;
     std::cout << "What we were loading before is only " << Image->getSize() << " BYTES " << std::endl;
+    std::cout << "Image starts at " << TgtImage->ImageStart << " then ends at " << TgtImage->ImageEnd << std::endl;
+    std::cout << "Entries start at" << TgtImage->EntriesBegin << " then ends at " << TgtImage->EntriesEnd << std::endl;
+    std::cout << "And first function is at " << (void *) min_addr << std::endl;
+
     std::vector<message_slot_t> malloc_batch_body(1);
       if (!MessageUtils::createMallocCmd(&malloc_batch_body[0], Image->getSize())) {
             std::cerr << "Error: Failed to create malloc command" << std::endl;
@@ -405,7 +409,7 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
            return Plugin::error(ErrorCode::UNKNOWN, "Couldn't write Image to device memory.");
     }
 
-    Image->setBaseImageAddress(ImageLoc - extra_bytes);
+    Image->setBaseImageAddress(ImageLoc - IVSHMEM_BASE_ADDRESS - extra_bytes);
     return Image;
   }
 
