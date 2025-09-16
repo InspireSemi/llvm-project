@@ -518,7 +518,6 @@ inline bool createFreeCmd(message_slot_t* slot, uint64_t address) {
  */
 inline bool createLaunchCmd(message_slot_t* slot,
                            uint64_t kernel_address,
-                           uint64_t args_address,
                            uint32_t grid_x, uint32_t grid_y, uint32_t grid_z,
                            uint32_t block_x, uint32_t block_y, uint32_t block_z,
                            uint32_t shared_mem_size = 0) {
@@ -526,7 +525,6 @@ inline bool createLaunchCmd(message_slot_t* slot,
     
     launch_cmd_t payload = {};
     payload.kernel_address = kernel_address;
-    payload.args_address = args_address;
     payload.grid_x = grid_x;
     payload.grid_y = grid_y;
     payload.grid_z = grid_z;

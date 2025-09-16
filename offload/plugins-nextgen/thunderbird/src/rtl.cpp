@@ -688,11 +688,11 @@ private:
 
   // 'this->Func' should be addr of kernel
   uint64_t kernel_device_addr = reinterpret_cast<uint64_t>(this->Func);
-  uint64_t args_device_addr = reinterpret_cast<uint64_t>(DeviceArgsPtr);
+  //uint64_t args_device_addr = reinterpret_cast<uint64_t>(DeviceArgsPtr);
 
   if (!MessageUtils::createLaunchCmd(&launch_batch_body[0],
                                    kernel_device_addr,
-                                   args_device_addr,
+   //                                args_device_addr,
                                    NumBlocks[0],   // grid_x
                                    NumBlocks[1],   // grid_y
                                    NumBlocks[2],   // grid_z
