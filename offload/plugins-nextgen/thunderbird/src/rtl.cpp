@@ -456,7 +456,7 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
           m_resp = std::get<malloc_rsp_t>(process(rtv, response_lut_itr->second, &slot));
         }
       }
-      MemAlloc = (void *) m_resp.address;
+      MemAlloc = (void *) (m_resp.address - IVSHMEM_BASE_ADDRESS);
       for (const auto& [clear_slot_idx, _] : respBatch) {
             MailboxUtils::clearD2HSlot(*wrChannel, clear_slot_idx);
       }
@@ -657,6 +657,7 @@ private:
                  KernelLaunchParamsTy LaunchParams,
                  AsyncInfoWrapperTy &AsyncInfoWrapper) const {
 
+  std::cout << "Do we happen to get to launch impl" << std::endl;
   // Cast to tbrid device so we can access our methods
   auto *TbirdDevice = static_cast<ThunderbirdDeviceTy *>(&GenericDevice);
 
