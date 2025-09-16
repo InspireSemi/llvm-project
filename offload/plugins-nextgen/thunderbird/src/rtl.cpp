@@ -400,7 +400,7 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     std::cout << "Required file size: " << std::dec << ((ImageLoc - IVSHMEM_BASE_ADDRESS) + Image->getSize()) << std::endl;
 
     int64_t written = wrChannel->transfer(ImageLoc - IVSHMEM_BASE_ADDRESS, (void*)min_addr, total_size);
-    if (written != static_cast<int64_t>(Image->getSize())) {
+    if (written != static_cast<int64_t>(total_size)) {
         std::cerr << "Error: Failed to write flat binary to device memory (written=" << written << ")" << std::endl;
            return Plugin::error(ErrorCode::UNKNOWN, "Couldn't write Image to device memory.");
     }
