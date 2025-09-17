@@ -60,6 +60,8 @@
 #include "llvm/TargetParser/Host.h"
 #include <atomic>
 #include <optional>
+#include <ostream>
+#include <iostream>
 
 using namespace llvm;
 using namespace llvm::opt;
@@ -489,7 +491,7 @@ namespace riscv64{
       "-nostdlib",
       "-nodefaultlibs",
       "-nostartfiles",
-      "-Wl,--gc-sections",
+      //"-Wl,--gc-sections",
       "-Wl,--no-undefined",
   };
 
