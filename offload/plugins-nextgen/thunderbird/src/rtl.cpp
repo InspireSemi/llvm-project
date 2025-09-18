@@ -339,11 +339,11 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
 
     size_t extra_bytes = (uintptr_t)TgtImage->ImageStart - min_addr;
     size_t total_size = Image->getSize() + extra_bytes;
-    std::cout << "HEY KAE! WE SHOULD TRY LOADING " << total_size << " BYTES" << std::endl;
-    std::cout << "What we were loading before is only " << Image->getSize() << " BYTES " << std::endl;
-    std::cout << "Image starts at " << TgtImage->ImageStart << " then ends at " << TgtImage->ImageEnd << std::endl;
-    std::cout << "Entries start at" << TgtImage->EntriesBegin << " then ends at " << TgtImage->EntriesEnd << std::endl;
-    std::cout << "And first function is at " << (void *) min_addr << std::endl;
+    //    std::cout << "HEY KAE! WE SHOULD TRY LOADING " << total_size << " BYTES" << std::endl;
+    //    std::cout << "What we were loading before is only " << Image->getSize() << " BYTES " << std::endl;
+    //    std::cout << "Image starts at " << TgtImage->ImageStart << " then ends at " << TgtImage->ImageEnd << std::endl;
+    //    std::cout << "Entries start at" << TgtImage->EntriesBegin << " then ends at " << TgtImage->EntriesEnd << std::endl;
+    //    std::cout << "And first function is at " << (void *) min_addr << std::endl;
 
     std::vector<message_slot_t> malloc_batch_body(1);
       if (!MessageUtils::createMallocCmd(&malloc_batch_body[0], Image->getSize())) {
@@ -396,20 +396,36 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
             MailboxUtils::clearD2HSlot(*wrChannel, clear_slot_idx);
       }
 
-    // BUG: Once bounds issue is fixed change this
-    std::cout << "=== TRANSFER DEBUG ===" << std::endl;
-    std::cout << "ImageLoc: 0x" << std::hex << ImageLoc << std::endl;
-    std::cout << "Transfer offset: 0x" << std::hex << (ImageLoc - IVSHMEM_BASE_ADDRESS) << std::endl;
-    std::cout << "Image size: " << std::dec << Image->getSize() << std::endl;
-    std::cout << "Required file size: " << std::dec << ((ImageLoc - IVSHMEM_BASE_ADDRESS) + Image->getSize()) << std::endl;
+    uintptr_t min_addr = UINTPTR_MAX;
+    uintptr_t max_addr = 0;
 
+    std::cout << "=== ALL ENTRIES ===" << std::endl;
+      for (auto *entry = TgtImage->EntriesBegin; entry != TgtImage->EntriesEnd; ++entry) {
+        std::cout << "Entry: " << entry->SymbolName 
+                  << " Addr: 0x" << std::hex << (uintptr_t)entry->Address 
+                  << " Size: " << std::dec << entry->Size << std::endl;
+        
+      if (entry->Size == 0) { // Function
+        min_addr = std::min(min_addr, (uintptr_t)entry->Address);
+        max_addr = std::max(max_addr, (uintptr_t)entry->Address);
+      }
+    }
+
+    std::cout << "Symbol range: 0x" << std::hex << min_addr << " to 0x" << max_addr << std::endl;
+    std::cout << "Image range:  0x" << std::hex << (uintptr_t)TgtImage->ImageStart 
+              << " to 0x" << (uintptr_t)TgtImage->ImageEnd << std::endl;
+
+    if (min_addr < (uintptr_t)TgtImage->ImageStart) {
+      std::cout << "PROBLEM: Symbols reference code BEFORE ImageStart by " 
+                << std::dec << ((uintptr_t)TgtImage->ImageStart - min_addr) << " bytes" << std::endl;
+    }
     int64_t written = wrChannel->transfer(ImageLoc - IVSHMEM_BASE_ADDRESS, (void*)min_addr, total_size);
     if (written != static_cast<int64_t>(total_size)) {
         std::cerr << "Error: Failed to write flat binary to device memory (written=" << written << ")" << std::endl;
            return Plugin::error(ErrorCode::UNKNOWN, "Couldn't write Image to device memory.");
     }
 
-    Image->setBaseImageAddress(ImageLoc - IVSHMEM_BASE_ADDRESS - extra_bytes);
+    Image->setBaseImageAddress(ImageLoc - extra_bytes);
     return Image;
   }
 
@@ -752,10 +768,8 @@ public:
   Error getGlobalMetadataFromDevice(GenericDeviceTy &GenericDevice,
                                     DeviceImageTy &Image,
                                     GlobalTy &DeviceGlobal) override {
-
     auto &ThunderbirdImage = static_cast<ThunderbirdDeviceImageTy &>(Image);
     uint64_t DeviceImageBase = ThunderbirdImage.getBaseImageAddress();
-
     if (DeviceImageBase == 0) {
       return Plugin::error(ErrorCode::UNINITIALIZED,
                            "Device image base address is not set.");
@@ -765,18 +779,25 @@ public:
     const __tgt_device_image *TgtImage = ThunderbirdImage.getTgtImage();
     const char *SymbolName = DeviceGlobal.getName().data();
 
-    // Find entry for our symbol.
+    // Recalculate min_addr to match loadBinaryImpl logic
+    uintptr_t min_addr = (uintptr_t)TgtImage->ImageStart;
+    for (auto *entry = TgtImage->EntriesBegin; entry != TgtImage->EntriesEnd; ++entry) {
+      if (entry->Size == 0) {
+        min_addr = std::min(min_addr, (uintptr_t)entry->Address);
+      }
+    }
+
     for (llvm::offloading::EntryTy *entry = TgtImage->EntriesBegin;
          entry != TgtImage->EntriesEnd; ++entry) {
       if (strcmp(entry->SymbolName, SymbolName) == 0) {
-        // Calc symbol offset within the image.
-        uint64_t symbol_offset = (uintptr_t)entry->Address - (uintptr_t)TgtImage->ImageStart;
+        // Calculate symbol offset from min_addr (where image actually starts)
+        uint64_t symbol_offset = (uintptr_t)entry->Address - min_addr;
         uint64_t final_device_address = DeviceImageBase + symbol_offset;
 
         std::cout << "========> Symbol Information <============= " << std::endl;
         std::cout << "Symbol: " << SymbolName << std::endl;
         std::cout << "entry->Address: 0x" << std::hex << (uintptr_t)entry->Address << std::endl;
-        std::cout << "TgtImage->ImageStart: 0x" << std::hex << (uintptr_t)TgtImage->ImageStart << std::endl;
+        std::cout << "min_addr: 0x" << std::hex << min_addr << std::endl;
         std::cout << "symbol_offset: 0x" << std::hex << symbol_offset << std::endl;
         std::cout << "DeviceImageBase: 0x" << std::hex << DeviceImageBase << std::endl;
         std::cout << "final_device_address: 0x" << std::hex << final_device_address << std::endl;
@@ -786,7 +807,6 @@ public:
         return Plugin::success();
       }
     }
-
     return Plugin::error(ErrorCode::NOT_FOUND, "failed to find global '%s' in the image entries",
                          SymbolName);
   }
