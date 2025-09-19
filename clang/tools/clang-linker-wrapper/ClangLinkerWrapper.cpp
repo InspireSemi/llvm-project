@@ -479,7 +479,7 @@ namespace riscv64{
   if (!TempFileOrErr)
     return TempFileOrErr.takeError();
 
-  SmallVector<StringRef, 16> CmdArgs{
+    SmallVector<StringRef, 16> CmdArgs{
       *ClangPath,
       "--no-default-config",
       "-o",
@@ -489,6 +489,7 @@ namespace riscv64{
       "-nostdlib",
       "-nodefaultlibs",
       "-nostartfiles",
+      "-pie",
       "-Wl,--no-undefined",
   };
 
