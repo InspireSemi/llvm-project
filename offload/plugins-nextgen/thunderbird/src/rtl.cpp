@@ -202,6 +202,8 @@ struct ThunderbirdDeviceImageTy : public DeviceImageTy {
        return FuncTable[name];
      }
 
+  uintptr_t MinVMA;
+
 private:
   /// The dynamic library that loaded the image.
   DynamicLibrary DynLib;
@@ -356,6 +358,16 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
            return Plugin::error(ErrorCode::UNKNOWN, "Getting a response back did not work.");
       }
 
+      uintptr_t min_addr = (uintptr_t)TgtImage->ImageStart;
+      for (auto *entry = TgtImage->EntriesBegin; entry != TgtImage->EntriesEnd; ++entry) {
+        if (entry->Size == 0) { // We found a function symbol
+          min_addr = std::min(min_addr, (uintptr_t)entry->Address);
+        }
+      }
+      Image->MinVMA = min_addr;
+
+      size_t extra_bytes = (uintptr_t)TgtImage->ImageStart - min_addr;
+      size_t total_size = Image->getSize() + extra_bytes;
       std::map<uint64_t, response_types> response_lut = {
         { MSG_RSP_LAUNCH, response_types{launch_rsp_t{}} },
         { MSG_RSP_MALLOC, response_types{malloc_rsp_t{}} },
@@ -749,13 +761,16 @@ public:
     // Get image data from host
     const __tgt_device_image *TgtImage = ThunderbirdImage.getTgtImage();
     const char *SymbolName = DeviceGlobal.getName().data();
+    uintptr_t MinVMA = ThunderbirdImage.MinVMA;
+
+
 
     // Find entry for our symbol.
     for (llvm::offloading::EntryTy *entry = TgtImage->EntriesBegin;
          entry != TgtImage->EntriesEnd; ++entry) {
       if (strcmp(entry->SymbolName, SymbolName) == 0) {
         // Calc symbol offset within the image.
-        uint64_t symbol_offset = (uintptr_t)entry->Address - (uintptr_t)TgtImage->ImageStart;
+        uint64_t symbol_offset = (uintptr_t)entry->Address - MinVMA;
         uint64_t final_device_address = DeviceImageBase + symbol_offset;
 
         std::cout << "========> Symbol Information <============= " << std::endl;

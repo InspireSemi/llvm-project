@@ -489,7 +489,6 @@ namespace riscv64{
       "-nostdlib",
       "-nodefaultlibs",
       "-nostartfiles",
-      "-Wl,--gc-sections",
       "-Wl,--no-undefined",
   };
 
