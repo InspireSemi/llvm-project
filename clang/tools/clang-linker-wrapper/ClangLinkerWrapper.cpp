@@ -489,6 +489,7 @@ namespace riscv64{
       "-nostdlib",
       "-nodefaultlibs",
       "-nostartfiles",
+      "-Xlinker",
       "-pie",
       "-Wl,--no-undefined",
   };
