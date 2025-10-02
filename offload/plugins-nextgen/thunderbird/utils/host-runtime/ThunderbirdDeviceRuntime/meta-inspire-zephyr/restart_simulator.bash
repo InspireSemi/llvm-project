@@ -15,13 +15,13 @@ pkill -f -u $(whoami) ivshmem
 
 # check if we are in an apptainer container, if not quit with an error telling the user to activate the environment of choice
 # and if they need to they can comment out the check here.
-if [ -z "$APPTAINER_ENVIRONMENT" ]; then
-  echo "Error: Please activate your Apptainer environment. Comment out this check if you are not using Apptainer."
-  exit 1
-fi
+#if [ -z "$APPTAINER_ENVIRONMENT" ]; then
+#  echo "Error: Please activate your Apptainer environment. Comment out this check if you are not using Apptainer."
+#  exit 1
+#fi
 
 #cd to riscv-inspire but first check if that path exists
-RISCV_INSPIRE_PATH="/mnt/localstore/zephyr/riscv-inspire"
+RISCV_INSPIRE_PATH="/scratch/ksuarez/tbird_runtime_Demo"
 if [ ! -d "$RISCV_INSPIRE_PATH" ]; then
 	echo "Error: Directory $RISCV_INSPIRE_PATH does not exist. Alter this code with your path"
 	exit 1

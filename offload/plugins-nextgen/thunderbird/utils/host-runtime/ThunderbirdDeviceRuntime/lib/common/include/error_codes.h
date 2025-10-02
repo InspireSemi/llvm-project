@@ -10,6 +10,8 @@
  * @copyright Copyright (c) 2025 InspireSemi
  */
 
+#include <stdint.h>
+
 #pragma once
 
 #ifdef __cplusplus

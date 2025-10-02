@@ -1,10 +1,10 @@
 /**
  * @file test_thunderbird_runtime.cpp
- * @author Generated for Thunderbird Host Runtime Tests
+ * @author Michael Brothers
  * @brief Simple initialization test for ThunderbirdHostRuntime
  * @details Tests basic construction and initialization of the ThunderbirdHostRuntime class
- * @version 0.1
- * @date 2025-08-03
+ * @version 0.2
+ * @date 2025-09-17
  * 
  * @copyright Copyright (c) 2025 InspireSemi
  */
@@ -262,7 +262,7 @@ bool test_runtime_functionality() {
         std::cout << "Creating kernel launch and free batch..." << std::endl;
         
         std::vector<message_slot_t> exec_batch_body(2);
-        if (!MessageUtils::createLaunchCmd(&exec_batch_body[0], allocated_address, 1, 1, 1, 2, 2, 2)) {
+        if (!MessageUtils::createLaunchCmd(&exec_batch_body[0], allocated_address, 1, 1, 1, 2, 2, 2, 0)) {
             std::cerr << "Error: Failed to create launch command" << std::endl;
             return false;
         }

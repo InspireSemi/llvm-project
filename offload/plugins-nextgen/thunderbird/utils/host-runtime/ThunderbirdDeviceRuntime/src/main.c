@@ -38,13 +38,13 @@ LOG_MODULE_REGISTER(app);
 EXPORT_SYMBOL(k_malloc);
 EXPORT_SYMBOL(k_free);
 
-uint8_t llext_buf[] = {
-#include "hello_world_ext.inc"
-};
+//uint8_t llext_buf[] = {
+//#include "hello_world_ext.inc"
+//};
 
-const size_t llext_buf_len = ARRAY_SIZE(llext_buf);
+//const size_t llext_buf_len = ARRAY_SIZE(llext_buf);
 
-static int run_llext_example(void){
+/*static int run_llext_example(void){
     LOG_INF("Calling hello world as a module");
 
     LOG_INF("Initializing device memory...");
@@ -84,12 +84,12 @@ static int run_llext_example(void){
 	return unload_result;
 
 }
-
+*/
 
 /**
  * @brief Run all test suites
  */
-static void run_all_tests(void)
+/*static void run_all_tests(void)
 {
     LOG_INF("\n=== Running Test Suites ===");
     
@@ -107,18 +107,18 @@ static void run_all_tests(void)
     // TODO: Add integration test runner when available
     
     LOG_INF("=== Test Suites Complete ===\n");
-}
+}*/
 
 /**
  * @brief Send an error response for unhandled messages
  * @param original_msg The original message that couldn't be handled
  */
-static void send_error_response(const message_slot_t* original_msg)
+/*static void send_error_response(const message_slot_t* original_msg)
 {
     // For now, just log the error. In a full implementation,
     // we would send an error response back to the host
     LOG_ERR("Unhandled message type: %d", original_msg->msg_id);
-}
+}*/
 
 /**
  * @brief Main message processing loop

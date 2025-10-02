@@ -96,13 +96,12 @@ static test_result_t test_message_slot_payload_types(void) {
     launch_cmd->block_x = 256;
     launch_cmd->block_y = 1;
     launch_cmd->block_z = 1;
-    launch_cmd->shared_mem_size = 1024;
-    launch_cmd->reserved = 0;
+    launch_cmd->args_address = 1024;
     
     TEST_ASSERT_EQ(0xABCDEF00, launch_cmd->kernel_address, "Kernel address should be set correctly");
     TEST_ASSERT_EQ(16, launch_cmd->grid_x, "Grid X should be set correctly");
     TEST_ASSERT_EQ(256, launch_cmd->block_x, "Block X should be set correctly");
-    TEST_ASSERT_EQ(1024, launch_cmd->shared_mem_size, "Shared memory size should be set correctly");
+    TEST_ASSERT_EQ(1024, launch_cmd->args_address, "Shared memory size should be set correctly");
     
     LOG_DBG("Message slot payload types test passed");
     TEST_PASS_RESULT();

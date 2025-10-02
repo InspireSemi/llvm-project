@@ -375,13 +375,13 @@ static test_result_t test_payload_access_in_all_real_slots(void)
         launch_cmd_t *launch_cmd = (launch_cmd_t*)h2d_slot->data;
         launch_cmd->kernel_address = 0x1000 + slot_idx;  // uint64_t, not void*
         launch_cmd->grid_x = 32 + slot_idx;
-        launch_cmd->shared_mem_size = 2048 + slot_idx;
+        launch_cmd->args_address = 2048 + slot_idx;
         TEST_ASSERT(launch_cmd->kernel_address == 0x1000 + slot_idx, 
                    "launch_cmd kernel_address failed in H2D slot");
         TEST_ASSERT(launch_cmd->grid_x == 32 + slot_idx, 
                    "launch_cmd grid_x failed in H2D slot");
-        TEST_ASSERT(launch_cmd->shared_mem_size == 2048 + slot_idx, 
-                   "launch_cmd shared_mem_size failed in H2D slot");
+        TEST_ASSERT(launch_cmd->args_address == 2048 + slot_idx, 
+                   "launch_cmd args_address failed in H2D slot");
     }
     
     // Test payload access in all D2H slots
