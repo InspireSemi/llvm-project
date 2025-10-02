@@ -692,15 +692,15 @@ private:
   auto *TbirdDevice = static_cast<ThunderbirdDeviceTy *>(&GenericDevice);
 
   // Allocate a buffer on device for kernel args
-  size_t ArgsSize = KernelArgs.NumArgs * sizeof(void *);
-  void *DeviceArgsPtr = nullptr;
+//  size_t ArgsSize = KernelArgs.NumArgs * sizeof(void *);
+ // void *DeviceArgsPtr = nullptr;
 
-  std::cout << "Kernel Data Argument size  " << LaunchParams.Size << std::endl;
+  //std::cout << "Kernel Data Argument size  " << LaunchParams.Size << std::endl;
   
-  for(int i = 0; i < LaunchParams.Size / sizeof(int); i++){
-    std::cout << "Arg "<< i << " val " << ((int *) LaunchParams.Data)[i] << std::endl;
-  }
-  if (ArgsSize > 0) {
+  //for(int i = 0; i < LaunchParams.Size / sizeof(int); i++){
+  //  std::cout << "Arg "<< i << " val " << ((int *) LaunchParams.Data)[i] << std::endl;
+  //}
+ /* if (ArgsSize > 0) {
     DeviceArgsPtr = TbirdDevice->allocate(ArgsSize, nullptr, TARGET_ALLOC_DEVICE);
     if (!DeviceArgsPtr) {
       return Plugin::error(ErrorCode::OUT_OF_RESOURCES,
@@ -716,7 +716,7 @@ private:
       TbirdDevice->free(DeviceArgsPtr, TARGET_ALLOC_DEVICE);
       return Err;
     }
-  }
+  }*/
 
 
 
@@ -725,9 +725,9 @@ private:
 
   // 'this->Func' should be addr of kernel
   uint64_t kernel_device_addr = reinterpret_cast<uint64_t>(this->Func);
-  uint64_t args_device_addr = reinterpret_cast<uint64_t>(DeviceArgsPtr);
+  //uint64_t args_device_addr = reinterpret_cast<uint64_t>(DeviceArgsPtr);
 
-  std::cout << "At send time, args_device_addr: " << args_device_addr << std::endl;
+  std::cout << "At send time, data: " << ((uint64_t *) LaunchParams.Data)[1] << std::endl;
 
   if (!MessageUtils::createLaunchCmd(&launch_batch_body[0],
                                    kernel_device_addr,
@@ -737,14 +737,14 @@ private:
                                    NumThreads[0],  // block_x
                                    NumThreads[1],  // block_y
                                    NumThreads[2],  // block_z
-                                   args_device_addr)) {           
-    TbirdDevice->free(DeviceArgsPtr, TARGET_ALLOC_DEVICE);
+                                   (uint64_t) LaunchParams.Data)) {           
+    //TbirdDevice->free(DeviceArgsPtr, TARGET_ALLOC_DEVICE);
     return Plugin::error(ErrorCode::UNKNOWN, "Failed to create launch command");
   }
 
   std::vector<std::pair<int, message_slot_t>> launch_batch;
   if (!create_command_batch(launch_batch_body, 0, launch_batch)) {
-    TbirdDevice->free(DeviceArgsPtr, TARGET_ALLOC_DEVICE);
+//    TbirdDevice->free(DeviceArgsPtr, TARGET_ALLOC_DEVICE);
     return Plugin::error(ErrorCode::UNKNOWN, "Failed to create launch batch");
   }
 
@@ -760,14 +760,14 @@ private:
 //  if (!tbird_resp_wait(launch_batch, TbirdDevice->rdChannel, respSlots, respBatch)) {
   if(!waitForResponseBatch(*TbirdDevice->rdChannel, launch_batch, respBatch, respSlots)){
 
-      TbirdDevice->free(DeviceArgsPtr, TARGET_ALLOC_DEVICE);
+  //    TbirdDevice->free(DeviceArgsPtr, TARGET_ALLOC_DEVICE);
       return Plugin::error(ErrorCode::UNKNOWN, "Device never responded to launch command.");
   }
 
   // Clean up & free the device-side argument buffer.
-  if (ArgsSize > 0) {
-    TbirdDevice->free(DeviceArgsPtr, TARGET_ALLOC_DEVICE);
-  }
+ // if (ArgsSize > 0) {
+    //TbirdDevice->free(DeviceArgsPtr, TARGET_ALLOC_DEVICE);
+ // }
 
   return Plugin::success();
 }

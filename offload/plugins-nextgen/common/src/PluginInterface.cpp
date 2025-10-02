@@ -565,7 +565,8 @@ Error GenericKernelTy::launch(GenericDeviceTy &GenericDevice, void **ArgPtrs,
   KernelLaunchParamsTy LaunchParams;
 
   // Kernel languages don't use indirection.
-  if (KernelArgs.Flags.IsCUDA) {
+  //if (KernelArgs.Flags.IsCUDA) {
+  if(true){
     LaunchParams =
         *reinterpret_cast<KernelLaunchParamsTy *>(KernelArgs.ArgPtrs);
   } else {
