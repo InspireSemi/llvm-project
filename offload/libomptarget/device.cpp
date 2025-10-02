@@ -25,6 +25,7 @@
 #include "Shared/EnvironmentVar.h"
 #include "llvm/Support/Error.h"
 
+#include <iostream>
 #include <cassert>
 #include <climits>
 #include <cstdint>
@@ -102,6 +103,7 @@ llvm::Expected<__tgt_device_binary>
 DeviceTy::loadBinary(__tgt_device_image *Img) {
   __tgt_device_binary Binary;
 
+  std::cout << "We try to load a binary to device." << std::endl;
   if (RTL->load_binary(RTLDeviceID, Img, &Binary) != OFFLOAD_SUCCESS)
     return error::createOffloadError(error::ErrorCode::INVALID_BINARY,
                                      "failed to load binary %p", Img);

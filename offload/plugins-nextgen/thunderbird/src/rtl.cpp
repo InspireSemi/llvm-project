@@ -69,6 +69,8 @@ namespace target {
 namespace plugin {
 using response_types = std::variant< std::monostate, launch_rsp_t, malloc_rsp_t, free_rsp_t>;
 
+using namespace BatchUtils;
+
 struct ResponseTypeVisitor {
    ResponseTypeVisitor() = default;
 
@@ -138,7 +140,7 @@ struct ThunderbirdKernelTy : public GenericKernelTy {
 
   /// Initialize the kernel.
   Error initImpl(GenericDeviceTy &Device, DeviceImageTy &Image) override {
-
+   
 	  // Functions have zero size.
     GlobalTy Global(getName(), 0);
 
@@ -228,6 +230,7 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
 
   /// Initialize the device
   Error initImpl(GenericPluginTy &Plugin) override {
+	 std::cout << "Trying to init device" << std::endl;
     // Inspect the environment to determine what type of device this is targeting
     char *tDevice = getenv("THUNDERBIRD_DEVICE");
     if( tDevice != NULL ){
@@ -243,6 +246,7 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
       }else if( tDeviceStr == "QEMU" ){
         char *tShmDevice = getenv("THUNDERBIRD_QEMU_SHM");
         if( tShmDevice == NULL ){
+		std::cout << "Fell in here" << std::endl;
           return Plugin::error(ErrorCode::INVALID_VALUE,
                                "invalid thunderbird qemu shm target %s",
                                tShmDevice);
@@ -277,6 +281,7 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
       MaxNumThreads = THUNDERBIRD_MAX_THREADS;
     }
 
+    std::cout << "The device started up" << std::endl;
     return Plugin::success();
   }
 
@@ -322,6 +327,7 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
   // TODO: use the Thunderbird API to load the implementation into memory
   Expected<DeviceImageTy *> loadBinaryImpl(const __tgt_device_image *TgtImage,
                                            int32_t ImageId) override {
+	  std::cout << "we're doing it" << std::endl;
     // Allocate and initialize the image object.
     // Unclear where this allocation is happening.
     // Given Plugin is genericpluginty, may be
@@ -353,7 +359,8 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
       }
       std::vector<std::pair<int, message_slot_t>> respSlots;
       std::vector<std::pair<int, message_slot_t>> respBatch;
-      if(!tbird_resp_wait(malloc_batch, rdChannel, respSlots, respBatch)){
+     // if(!tbird_resp_wait(malloc_batch, rdChannel, respSlots, respBatch)){
+     if(!waitForResponseBatch(*rdChannel, malloc_batch, respBatch, respSlots)){
            // return nullptr;
            return Plugin::error(ErrorCode::UNKNOWN, "Getting a response back did not work.");
       }
@@ -445,7 +452,8 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
       }
       std::vector<std::pair<int, message_slot_t>> respSlots;
       std::vector<std::pair<int, message_slot_t>> respBatch;
-      if(!tbird_resp_wait(malloc_batch, rdChannel, respSlots, respBatch)){
+      //if(!tbird_resp_wait(malloc_batch, rdChannel, respSlots, respBatch)){
+      if(!waitForResponseBatch(*rdChannel, malloc_batch, respBatch, respSlots)){
             return nullptr;
       }
 
@@ -508,7 +516,8 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     }
     std::vector<std::pair<int, message_slot_t>> respSlots;
     std::vector<std::pair<int, message_slot_t>> respBatch;
-    if(!tbird_resp_wait(free_batch, rdChannel, respSlots, respBatch)){
+    //if(!tbird_resp_wait(free_batch, rdChannel, respSlots, respBatch)){
+    if(!waitForResponseBatch(*rdChannel, free_batch, respBatch, respSlots)){
 	    return false;
     }
 
@@ -554,12 +563,21 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
   }
 
   /// Submit data to the device (host to device transfer).
-  Error dataSubmitImpl(void *TgtPtr, const void *HstPtr, int64_t Size,
+ /* Error dataSubmitImpl(void *TgtPtr, const void *HstPtr, int64_t Size,
                        AsyncInfoWrapperTy &AsyncInfoWrapper) override {
 
     wrChannel->transfer((uint64_t)(TgtPtr), HstPtr, (size_t)(Size) );
     return Plugin::success();
-  }
+  }*/
+
+Error dataSubmitImpl(void *TgtPtr, const void *HstPtr, int64_t Size,
+                     AsyncInfoWrapperTy &AsyncInfoWrapper) override {
+    std::cout << "dataSubmit: TgtPtr=" << TgtPtr << " HstPtr=" << HstPtr 
+              << " Size=" << Size << " Value=" 
+              << (Size == sizeof(int) ? *(int*)HstPtr : 0) << std::endl;
+    wrChannel->transfer((uint64_t)(TgtPtr), HstPtr, (size_t)(Size));
+    return Plugin::success();
+}
 
   /// Retrieve data from the device (device to host transfer).
   Error dataRetrieveImpl(void *HstPtr, const void *TgtPtr, int64_t Size,
@@ -677,6 +695,11 @@ private:
   size_t ArgsSize = KernelArgs.NumArgs * sizeof(void *);
   void *DeviceArgsPtr = nullptr;
 
+  std::cout << "Kernel Data Argument size  " << LaunchParams.Size << std::endl;
+  
+  for(int i = 0; i < LaunchParams.Size / sizeof(int); i++){
+    std::cout << "Arg "<< i << " val " << ((int *) LaunchParams.Data)[i] << std::endl;
+  }
   if (ArgsSize > 0) {
     DeviceArgsPtr = TbirdDevice->allocate(ArgsSize, nullptr, TARGET_ALLOC_DEVICE);
     if (!DeviceArgsPtr) {
@@ -687,7 +710,7 @@ private:
 
   // Copy args to device from host
   if (ArgsSize > 0) {
-    if (auto Err = TbirdDevice->dataSubmitImpl(DeviceArgsPtr, LaunchParams.Ptrs,
+    if (auto Err = TbirdDevice->dataSubmitImpl(DeviceArgsPtr, LaunchParams.Data,
                                               ArgsSize, AsyncInfoWrapper)) {
       // If the copy fails, we must clean up the memory we allocated.
       TbirdDevice->free(DeviceArgsPtr, TARGET_ALLOC_DEVICE);
@@ -695,23 +718,26 @@ private:
     }
   }
 
+
+
   // Prepare and send the launch command via the mailbox.
   std::vector<message_slot_t> launch_batch_body(1);
 
   // 'this->Func' should be addr of kernel
   uint64_t kernel_device_addr = reinterpret_cast<uint64_t>(this->Func);
-  //uint64_t args_device_addr = reinterpret_cast<uint64_t>(DeviceArgsPtr);
+  uint64_t args_device_addr = reinterpret_cast<uint64_t>(DeviceArgsPtr);
+
+  std::cout << "At send time, args_device_addr: " << args_device_addr << std::endl;
 
   if (!MessageUtils::createLaunchCmd(&launch_batch_body[0],
                                    kernel_device_addr,
-   //                                args_device_addr,
                                    NumBlocks[0],   // grid_x
                                    NumBlocks[1],   // grid_y
                                    NumBlocks[2],   // grid_z
                                    NumThreads[0],  // block_x
                                    NumThreads[1],  // block_y
                                    NumThreads[2],  // block_z
-                                   0)) {           // shared_mem_size
+                                   args_device_addr)) {           
     TbirdDevice->free(DeviceArgsPtr, TARGET_ALLOC_DEVICE);
     return Plugin::error(ErrorCode::UNKNOWN, "Failed to create launch command");
   }
@@ -731,7 +757,9 @@ private:
   // Wait for the kernel to finish execution.
   std::vector<std::pair<int, message_slot_t>> respSlots;
   std::vector<std::pair<int, message_slot_t>> respBatch;
-  if (!tbird_resp_wait(launch_batch, TbirdDevice->rdChannel, respSlots, respBatch)) {
+//  if (!tbird_resp_wait(launch_batch, TbirdDevice->rdChannel, respSlots, respBatch)) {
+  if(!waitForResponseBatch(*TbirdDevice->rdChannel, launch_batch, respBatch, respSlots)){
+
       TbirdDevice->free(DeviceArgsPtr, TARGET_ALLOC_DEVICE);
       return Plugin::error(ErrorCode::UNKNOWN, "Device never responded to launch command.");
   }
@@ -803,6 +831,7 @@ struct ThunderbirdPluginTy final : public GenericPluginTy {
 
   /// Initialize the plugin and return the number of devices.
   Expected<int32_t> initImpl() override {
+	  std::cout << "Initing plugin" << std::endl;
 #ifdef USES_DYNAMIC_FFI
     if (auto Err = Plugin::check(ffi_init(), "failed to initialize libffi"))
       return std::move(Err);
