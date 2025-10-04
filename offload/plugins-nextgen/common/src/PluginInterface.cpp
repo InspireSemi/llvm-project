@@ -565,8 +565,8 @@ Error GenericKernelTy::launch(GenericDeviceTy &GenericDevice, void **ArgPtrs,
   KernelLaunchParamsTy LaunchParams;
 
   // Kernel languages don't use indirection.
-  //if (KernelArgs.Flags.IsCUDA) {
-  if(true){
+//  if (KernelArgs.Flags.IsCUDA) {
+    if(true){
     LaunchParams =
         *reinterpret_cast<KernelLaunchParamsTy *>(KernelArgs.ArgPtrs);
   } else {
@@ -574,6 +574,12 @@ Error GenericKernelTy::launch(GenericDeviceTy &GenericDevice, void **ArgPtrs,
         prepareArgs(GenericDevice, ArgPtrs, ArgOffsets, KernelArgs.NumArgs,
                     Args, Ptrs, *KernelLaunchEnvOrErr);
   }
+
+    LaunchParams.Size = 0;
+    for(int i = 0; i < KernelArgs.NumArgs; i++){
+      LaunchParams.Size += KernelArgs.ArgSizes[i];
+    }
+
 
   uint32_t NumThreads[3] = {KernelArgs.ThreadLimit[0],
                             KernelArgs.ThreadLimit[1],

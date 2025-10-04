@@ -692,16 +692,17 @@ private:
   auto *TbirdDevice = static_cast<ThunderbirdDeviceTy *>(&GenericDevice);
 
   // Allocate a buffer on device for kernel args
-//  size_t ArgsSize = KernelArgs.NumArgs * sizeof(void *);
- // void *DeviceArgsPtr = nullptr;
+ // size_t ArgsSize = KernelArgs.NumArgs * sizeof(void *);
+  size_t ArgsSize = LaunchParams.Size;
+  void *DeviceArgsPtr = nullptr;
 
-  //std::cout << "Kernel Data Argument size  " << LaunchParams.Size << std::endl;
+  std::cout << "Kernel Data Argument size  " << LaunchParams.Size << std::endl;
   
-  //for(int i = 0; i < LaunchParams.Size / sizeof(int); i++){
-  //  std::cout << "Arg "<< i << " val " << ((int *) LaunchParams.Data)[i] << std::endl;
-  //}
- /* if (ArgsSize > 0) {
-    DeviceArgsPtr = TbirdDevice->allocate(ArgsSize, nullptr, TARGET_ALLOC_DEVICE);
+ // for(int i = 0; i < LaunchParams.Size / sizeof(int); i++){
+ //   std::cout << "Arg "<< i << " val " << ((int *) LaunchParams.Data)[i] << std::endl;
+ // }
+  if (ArgsSize > 0) {
+    DeviceArgsPtr = TbirdDevice->allocate(LaunchParams.Size, nullptr, TARGET_ALLOC_DEVICE);
     if (!DeviceArgsPtr) {
       return Plugin::error(ErrorCode::OUT_OF_RESOURCES,
                            "Failed to allocate device memory for kernel args");
@@ -716,7 +717,7 @@ private:
       TbirdDevice->free(DeviceArgsPtr, TARGET_ALLOC_DEVICE);
       return Err;
     }
-  }*/
+  }
 
 
 
@@ -727,7 +728,7 @@ private:
   uint64_t kernel_device_addr = reinterpret_cast<uint64_t>(this->Func);
   //uint64_t args_device_addr = reinterpret_cast<uint64_t>(DeviceArgsPtr);
 
-  std::cout << "At send time, data: " << ((uint64_t *) LaunchParams.Data)[1] << std::endl;
+  std::cout << "At send time, data: " << std::hex <<  ((uint64_t *) LaunchParams.Data)[0] << std::endl;
 
   if (!MessageUtils::createLaunchCmd(&launch_batch_body[0],
                                    kernel_device_addr,
@@ -737,7 +738,7 @@ private:
                                    NumThreads[0],  // block_x
                                    NumThreads[1],  // block_y
                                    NumThreads[2],  // block_z
-                                   (uint64_t) LaunchParams.Data)) {           
+                                   (uint64_t) DeviceArgsPtr + IVSHMEM_BASE_ADDRESS)) {           
     //TbirdDevice->free(DeviceArgsPtr, TARGET_ALLOC_DEVICE);
     return Plugin::error(ErrorCode::UNKNOWN, "Failed to create launch command");
   }

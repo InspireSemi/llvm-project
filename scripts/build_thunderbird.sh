@@ -236,6 +236,7 @@ if [[ "$SKIP_OFFLOAD" -eq 0 ]]; then
 		-DFFI_INCLUDE_DIR="$FFI_INC"
 		-DCMAKE_ASM_COMPILER="$PREFIX/bin/clang"
 		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+		-DCMAKE_BUILD_TYPE="Debug"
 	)
 
 	# Optional tests
