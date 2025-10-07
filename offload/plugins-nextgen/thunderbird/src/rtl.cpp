@@ -476,11 +476,10 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
           m_resp = std::get<malloc_rsp_t>(process(rtv, response_lut_itr->second, &slot));
         }
       }
-      MemAlloc = (void *) (m_resp.address - IVSHMEM_BASE_ADDRESS);
+      MemAlloc = (void *)m_resp.address;
       for (const auto& [clear_slot_idx, _] : respBatch) {
             MailboxUtils::clearD2HSlot(*wrChannel, clear_slot_idx);
       }
-      //MemAlloc = std::malloc(Size);
       break;
      }
     case TARGET_ALLOC_HOST:
@@ -493,7 +492,6 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
   /// Free the memory. Use std::free in all cases.
   // TODO: switch the free below for the target free
   int free(void *TgtPtr, TargetAllocTy Kind) override {
-//    std::free(TgtPtr);
     std::vector<message_slot_t> free_batch_body(1);
     if (!MessageUtils::createFreeCmd(&free_batch_body[0], (uint64_t) TgtPtr)) {
             std::cerr << "Error: Failed to create free command" << std::endl;
@@ -562,28 +560,27 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     return false;
   }
 
-  /// Submit data to the device (host to device transfer).
- /* Error dataSubmitImpl(void *TgtPtr, const void *HstPtr, int64_t Size,
-                       AsyncInfoWrapperTy &AsyncInfoWrapper) override {
-
-    wrChannel->transfer((uint64_t)(TgtPtr), HstPtr, (size_t)(Size) );
-    return Plugin::success();
-  }*/
-
 Error dataSubmitImpl(void *TgtPtr, const void *HstPtr, int64_t Size,
                      AsyncInfoWrapperTy &AsyncInfoWrapper) override {
-    std::cout << "dataSubmit: TgtPtr=" << TgtPtr << " HstPtr=" << HstPtr 
+  uint64_t FullAddress = (uint64_t)TgtPtr;
+  uint64_t TransferOffset = FullAddress - IVSHMEM_BASE_ADDRESS;
+
+  std::cout << "dataSubmit: TgtPtr=0x" << std::hex << FullAddress 
+            << " (Offset=0x" << TransferOffset << ")"
+            << " HstPtr=" << HstPtr << std::dec
               << " Size=" << Size << " Value=" 
               << (Size == sizeof(int) ? *(int*)HstPtr : 0) << std::endl;
-    wrChannel->transfer((uint64_t)(TgtPtr), HstPtr, (size_t)(Size));
-    return Plugin::success();
+  wrChannel->transfer(TransferOffset, HstPtr, (size_t)(Size));
+  return Plugin::success();
 }
 
   /// Retrieve data from the device (device to host transfer).
   Error dataRetrieveImpl(void *HstPtr, const void *TgtPtr, int64_t Size,
                          AsyncInfoWrapperTy &AsyncInfoWrapper) override {
-    rdChannel->transfer((uint64_t)(TgtPtr), HstPtr, (size_t)(Size) );
-    return Plugin::success();
+  uint64_t FullAddress = (uint64_t)TgtPtr;
+  uint64_t TransferOffset = FullAddress - IVSHMEM_BASE_ADDRESS;
+  rdChannel->transfer(TransferOffset, HstPtr, (size_t)(Size));
+  return Plugin::success();
   }
 
   /// Exchange data between two devices within the plugin. This function is not
@@ -708,6 +705,12 @@ private:
                            "Failed to allocate device memory for kernel args");
     }
   }
+  std::cout << "LaunchParams.Data hex dump: ";
+for (int i = 0; i < ArgsSize; i++) {
+    std::cout << std::hex << std::setw(2) << std::setfill('0') 
+              << (int)static_cast<uint8_t*>(LaunchParams.Data)[i] << " ";
+}
+std::cout << std::dec << std::endl;
 
   // Copy args to device from host
   if (ArgsSize > 0) {
@@ -729,7 +732,7 @@ private:
   //uint64_t args_device_addr = reinterpret_cast<uint64_t>(DeviceArgsPtr);
 
   std::cout << "At send time, data: " << std::hex <<  ((uint64_t *) LaunchParams.Data)[0] << std::endl;
-
+  
   if (!MessageUtils::createLaunchCmd(&launch_batch_body[0],
                                    kernel_device_addr,
                                    NumBlocks[0],   // grid_x
@@ -738,7 +741,7 @@ private:
                                    NumThreads[0],  // block_x
                                    NumThreads[1],  // block_y
                                    NumThreads[2],  // block_z
-                                   (uint64_t) DeviceArgsPtr + IVSHMEM_BASE_ADDRESS)) {           
+                                   (uint64_t) DeviceArgsPtr)) {           
     //TbirdDevice->free(DeviceArgsPtr, TARGET_ALLOC_DEVICE);
     return Plugin::error(ErrorCode::UNKNOWN, "Failed to create launch command");
   }
@@ -758,17 +761,22 @@ private:
   // Wait for the kernel to finish execution.
   std::vector<std::pair<int, message_slot_t>> respSlots;
   std::vector<std::pair<int, message_slot_t>> respBatch;
-//  if (!tbird_resp_wait(launch_batch, TbirdDevice->rdChannel, respSlots, respBatch)) {
   if(!waitForResponseBatch(*TbirdDevice->rdChannel, launch_batch, respBatch, respSlots)){
 
-  //    TbirdDevice->free(DeviceArgsPtr, TARGET_ALLOC_DEVICE);
       return Plugin::error(ErrorCode::UNKNOWN, "Device never responded to launch command.");
   }
+  if (ArgsSize > 0) {
+    if (auto Err = TbirdDevice->dataRetrieveImpl(LaunchParams.Data, DeviceArgsPtr,
+                                                   ArgsSize, AsyncInfoWrapper)) {
+      TbirdDevice->free(DeviceArgsPtr, TARGET_ALLOC_DEVICE);
+      return Err;
+    }
+  }
 
-  // Clean up & free the device-side argument buffer.
- // if (ArgsSize > 0) {
-    //TbirdDevice->free(DeviceArgsPtr, TARGET_ALLOC_DEVICE);
- // }
+  // clean up
+  if (ArgsSize > 0) {
+      TbirdDevice->free(DeviceArgsPtr, TARGET_ALLOC_DEVICE);
+  }
 
   return Plugin::success();
 }
