@@ -574,12 +574,6 @@ Error GenericKernelTy::launch(GenericDeviceTy &GenericDevice, void **ArgPtrs,
                     Args, Ptrs, *KernelLaunchEnvOrErr);
   }
 
-    //LaunchParams.Size = 0;
-    //for(int i = 0; i < KernelArgs.NumArgs; i++){
-    //  LaunchParams.Size += KernelArgs.ArgSizes[i];
-    //}
-
-
   uint32_t NumThreads[3] = {KernelArgs.ThreadLimit[0],
                             KernelArgs.ThreadLimit[1],
                             KernelArgs.ThreadLimit[2]};
