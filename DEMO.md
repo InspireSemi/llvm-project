@@ -59,10 +59,6 @@ meta-inspire-zephyr/recipes-kernel/zephyr-kernel/files/inspire_zephyr.patch
 2. Apply the provided patch to `meta_inspire_zephyr`
 3. Use the `runtime_fixes` branch on host-runtime
 
-**Key notes:**
-- Apply the patch to get symbol support
-- Ensure you're using the `runtime_fixes` branch on host-runtime
-
 ## Part 3: Build the Demo Application
 
 ### 1. Navigate to Demo Directory
