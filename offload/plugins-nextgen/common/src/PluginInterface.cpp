@@ -910,7 +910,6 @@ GenericDeviceTy::loadBinary(GenericPluginTy &Plugin,
   assert(InputTgtImage && "Expected non-null target image");
   DP("Load data from image " DPxMOD "\n", DPxPTR(InputTgtImage->ImageStart));
 
-  std::cout << "JIT binary." << std::endl;
   auto PostJITImageOrErr = Plugin.getJIT().process(*InputTgtImage, *this);
   if (!PostJITImageOrErr) {
     auto Err = PostJITImageOrErr.takeError();
@@ -1720,17 +1719,14 @@ Error GenericPluginTy::deinitDevice(int32_t DeviceId) {
 }
 
 Expected<bool> GenericPluginTy::checkELFImage(StringRef Image) const {
-	std::cout << "Checking ELF validity" << std::endl;
   // First check if this image is a regular ELF file.
   if (!utils::elf::isELF(Image))
     return false;
 
-  std::cout << "it was an ELF" << std::endl;
   // Check if this image is an ELF with a matching machine value.
   auto MachineOrErr = utils::elf::checkMachine(Image, getMagicElfBits());
   if (!MachineOrErr)
     return MachineOrErr.takeError();
-  std::cout << "ELF valid" << std::endl;
   return MachineOrErr;
 }
 
@@ -1754,7 +1750,6 @@ int32_t GenericPluginTy::is_plugin_compatible(__tgt_device_image *Image) {
   StringRef Buffer(reinterpret_cast<const char *>(Image->ImageStart),
                    utils::getPtrDiff(Image->ImageEnd, Image->ImageStart));
 
-  std::cout << "Using is_plugin_compatible" << std::endl;
   auto HandleError = [&](Error Err) -> bool {
     [[maybe_unused]] std::string ErrStr = toString(std::move(Err));
     DP("Failure to check validity of image %p: %s", Image, ErrStr.c_str());
@@ -1788,7 +1783,6 @@ int32_t GenericPluginTy::is_device_compatible(int32_t DeviceId,
   StringRef Buffer(reinterpret_cast<const char *>(Image->ImageStart),
                    utils::getPtrDiff(Image->ImageEnd, Image->ImageStart));
 
-  std::cout << "Using is_device_compatible" << std::endl;
   auto HandleError = [&](Error Err) -> bool {
     [[maybe_unused]] std::string ErrStr = toString(std::move(Err));
     DP("Failure to check validity of image %p: %s", Image, ErrStr.c_str());
