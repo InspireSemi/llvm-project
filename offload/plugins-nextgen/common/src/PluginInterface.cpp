@@ -37,6 +37,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <iostream>
 
 using namespace llvm;
 using namespace omp;
@@ -1726,7 +1727,6 @@ Expected<bool> GenericPluginTy::checkELFImage(StringRef Image) const {
   auto MachineOrErr = utils::elf::checkMachine(Image, getMagicElfBits());
   if (!MachineOrErr)
     return MachineOrErr.takeError();
-
   return MachineOrErr;
 }
 
@@ -1762,8 +1762,9 @@ int32_t GenericPluginTy::is_plugin_compatible(__tgt_device_image *Image) {
   case file_magic::elf_shared_object:
   case file_magic::elf_core: {
     auto MatchOrErr = checkELFImage(Buffer);
-    if (Error Err = MatchOrErr.takeError())
+    if (Error Err = MatchOrErr.takeError()){
       return HandleError(std::move(Err));
+    }
     return *MatchOrErr;
   }
   case file_magic::bitcode: {
@@ -1794,8 +1795,9 @@ int32_t GenericPluginTy::is_device_compatible(int32_t DeviceId,
   case file_magic::elf_shared_object:
   case file_magic::elf_core: {
     auto MatchOrErr = checkELFImage(Buffer);
-    if (Error Err = MatchOrErr.takeError())
+    if (Error Err = MatchOrErr.takeError()){
       return HandleError(std::move(Err));
+    }
     if (!*MatchOrErr)
       return false;
 

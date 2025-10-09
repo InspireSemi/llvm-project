@@ -19,6 +19,8 @@
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/MemoryBuffer.h"
 
+#include <iostream>
+
 using namespace llvm;
 using namespace llvm::ELF;
 using namespace llvm::object;
@@ -59,8 +61,9 @@ template <class ELFT>
 static Expected<bool>
 checkMachineImpl(const object::ELFObjectFile<ELFT> &ELFObj, uint16_t EMachine) {
   const auto Header = ELFObj.getELFFile().getHeader();
-  if (Header.e_type != ET_EXEC && Header.e_type != ET_DYN)
+  if (Header.e_type != ET_EXEC && Header.e_type != ET_DYN){
     return createError("Only executable ELF files are supported");
+  }
 
   if (Header.e_machine == EM_AMDGPU) {
     if (Header.e_ident[EI_OSABI] != ELFOSABI_AMDGPU_HSA)

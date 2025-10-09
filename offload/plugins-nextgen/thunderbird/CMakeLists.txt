@@ -14,6 +14,18 @@ else()
   message(FATAL_ERROR "Cannot find thunderbird/utils/host-runtime/DataTransferEngine libary")
 endif()
 
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/utils/host-runtime/ThunderbirdHostRuntime")
+  add_subdirectory(utils/host-runtime/ThunderbirdHostRuntime)
+  target_link_libraries(omptarget.rtl.thunderbird PRIVATE ThunderbirdHostRuntime)
+else()
+  message(FATAL_ERROR "Cannot find thunderbird/utils/host-runtime/ThunderbirdHostRuntime libary")
+endif()
+
+
+target_include_directories(omptarget.rtl.thunderbird PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}/utils
+)
+
 # Configure testing for the THUNDERBIRD plugin. We will build tests if we could a
 # functional THUNDERBIRD on the system, or if manually specifies by the user.
 option(LIBOMPTARGET_FORCE_THUNDERBIRD_TESTS "Build THUNDERBIRD libomptarget tests" OFF)

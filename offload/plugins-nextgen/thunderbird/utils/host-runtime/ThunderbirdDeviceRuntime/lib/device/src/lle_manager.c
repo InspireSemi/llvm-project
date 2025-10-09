@@ -13,7 +13,7 @@ LOG_MODULE_REGISTER(lle_manager, LOG_LEVEL_DBG);
 
 // Default configuration
 #ifndef CONFIG_LLE_ENTRY_POINT_SYMBOL
-#define CONFIG_LLE_ENTRY_POINT_SYMBOL "execute"
+#define CONFIG_LLE_ENTRY_POINT_SYMBOL "__omp_offloading_802_ec95c4_main_l11"
 #endif
 
 #ifndef CONFIG_LLE_NAME_PREFIX

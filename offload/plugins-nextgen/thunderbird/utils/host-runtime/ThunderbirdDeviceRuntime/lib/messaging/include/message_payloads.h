@@ -55,8 +55,7 @@ typedef struct __attribute__((packed)) {
     uint64_t kernel_address;
     uint32_t grid_x, grid_y, grid_z;
     uint32_t block_x, block_y, block_z;
-    uint32_t shared_mem_size;
-    uint32_t reserved;
+    uint64_t args_address;
 } launch_cmd_t;
 
 typedef struct __attribute__((packed)) {

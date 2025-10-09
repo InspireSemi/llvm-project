@@ -135,8 +135,7 @@ static test_result_t test_message_router_different_message_types(void) {
     launch_cmd->block_x = 256;
     launch_cmd->block_y = 1;
     launch_cmd->block_z = 1;
-    launch_cmd->shared_mem_size = 1024;
-    launch_cmd->reserved = 0;
+    launch_cmd->args_address = 1024;
     
     gen_result = message_router_generate_response(&test_input_slot, &test_output_slot);
     if (memory_allocated) {

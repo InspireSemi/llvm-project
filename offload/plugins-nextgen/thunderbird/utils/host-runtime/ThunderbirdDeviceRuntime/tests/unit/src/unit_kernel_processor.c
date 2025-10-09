@@ -43,7 +43,7 @@ static test_result_t test_kernel_processor_basic_error_handling(void)
         .kernel_address = 0,
         .grid_x = 1, .grid_y = 1, .grid_z = 1,
         .block_x = 1, .block_y = 1, .block_z = 1,
-        .shared_mem_size = 0
+        .args_address = 0
     };
     
     result = kernel_processor_execute(&zero_address);
@@ -54,7 +54,7 @@ static test_result_t test_kernel_processor_basic_error_handling(void)
         .kernel_address = (uint64_t)(uintptr_t)TEST_ADDRESS_1,  // Unmapped address
         .grid_x = 1, .grid_y = 1, .grid_z = 1,
         .block_x = 32, .block_y = 1, .block_z = 1,
-        .shared_mem_size = 512
+        .args_address = 512
     };
     
     result = kernel_processor_execute(&valid_params_bad_address);
@@ -68,7 +68,7 @@ static test_result_t test_kernel_processor_basic_error_handling(void)
         .kernel_address = (uint64_t)(uintptr_t)regular_memory,
         .grid_x = 1, .grid_y = 1, .grid_z = 1,
         .block_x = 32, .block_y = 1, .block_z = 1,
-        .shared_mem_size = 512
+        .args_address = 512
     };
     
     result = kernel_processor_execute(&not_lle_module);
@@ -100,7 +100,7 @@ static test_result_t test_kernel_processor_llext_loading_errors(void)
         .kernel_address = (uint64_t)lle_address,
         .grid_x = 1, .grid_y = 1, .grid_z = 1,
         .block_x = 32, .block_y = 1, .block_z = 1,
-        .shared_mem_size = 512
+        .args_address = 512
     };
     
     result = kernel_processor_execute(&invalid_llext);
@@ -136,7 +136,7 @@ static test_result_t test_kernel_processor_integration_with_lle_manager(void)
         .block_x = 32,
         .block_y = 1,
         .block_z = 1,
-        .shared_mem_size = 1024
+        .args_address = 1024
     };
     
     // This should attempt to load the LLEXT and find the kernel entry point

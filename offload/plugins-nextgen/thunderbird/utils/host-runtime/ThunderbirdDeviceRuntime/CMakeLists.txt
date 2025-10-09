@@ -52,8 +52,9 @@ target_include_directories(app PRIVATE
 )
 
 # Add llext subdirectory
-add_subdirectory(tests/llext/hello_world_mod)
+#add_subdirectory(tests/llext/saxpy_llext)
+#add_subdirectory(tests/llext/hello_world_mod)
 
 # Ensure the llext is built before the main app so the generated include is available
-add_dependencies(app hello_world_ext)
-
+#add_dependencies(app hello_world_ext)
+#add_dependencies(app saxpy_llext_ext)

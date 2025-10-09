@@ -4,9 +4,12 @@ project(ThunderbirdHostRuntime)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Collect all .cpp files in src/
+file(GLOB THR_SOURCES "src/*.cpp")
+
 # Create the shared library
 add_library(ThunderbirdHostRuntime SHARED
-    src/ThunderbirdRuntime.cpp
+    ${THR_SOURCES}
 )
 
 target_include_directories(ThunderbirdHostRuntime
@@ -22,6 +25,7 @@ target_include_directories(ThunderbirdHostRuntime
 target_link_libraries(ThunderbirdHostRuntime
     PUBLIC
         DataTransferEngine
+        elf  # Add libelf linkage here with PUBLIC to propagate to dependents
 )
 
 # Set library properties
