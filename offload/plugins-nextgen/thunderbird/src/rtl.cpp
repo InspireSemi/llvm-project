@@ -230,7 +230,6 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
 
   /// Initialize the device
   Error initImpl(GenericPluginTy &Plugin) override {
-	 std::cout << "Trying to init device" << std::endl;
     // Inspect the environment to determine what type of device this is targeting
     char *tDevice = getenv("THUNDERBIRD_DEVICE");
     if( tDevice != NULL ){
@@ -246,7 +245,6 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
       }else if( tDeviceStr == "QEMU" ){
         char *tShmDevice = getenv("THUNDERBIRD_QEMU_SHM");
         if( tShmDevice == NULL ){
-		std::cout << "Fell in here" << std::endl;
           return Plugin::error(ErrorCode::INVALID_VALUE,
                                "invalid thunderbird qemu shm target %s",
                                tShmDevice);
@@ -281,7 +279,6 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
       MaxNumThreads = THUNDERBIRD_MAX_THREADS;
     }
 
-    std::cout << "The device started up" << std::endl;
     return Plugin::success();
   }
 
@@ -327,7 +324,6 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
   // TODO: use the Thunderbird API to load the implementation into memory
   Expected<DeviceImageTy *> loadBinaryImpl(const __tgt_device_image *TgtImage,
                                            int32_t ImageId) override {
-	  std::cout << "we're doing it" << std::endl;
     // Allocate and initialize the image object.
     // Unclear where this allocation is happening.
     // Given Plugin is genericpluginty, may be
@@ -398,13 +394,6 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
       for (const auto& [clear_slot_idx, _] : respBatch) {
             MailboxUtils::clearD2HSlot(*wrChannel, clear_slot_idx);
       }
-
-    // BUG: Once bounds issue is fixed change this
-    std::cout << "=== TRANSFER DEBUG ===" << std::endl;
-    std::cout << "ImageLoc: 0x" << std::hex << ImageLoc << std::endl;
-    std::cout << "Transfer offset: 0x" << std::hex << (ImageLoc - IVSHMEM_BASE_ADDRESS) << std::endl;
-    std::cout << "Image size: " << std::dec << Image->getSize() << std::endl;
-    std::cout << "Required file size: " << std::dec << ((ImageLoc - IVSHMEM_BASE_ADDRESS) + Image->getSize()) << std::endl;
 
     int64_t written = wrChannel->transfer(ImageLoc - IVSHMEM_BASE_ADDRESS, TgtImage->ImageStart, Image->getSize());
     if (written != static_cast<int64_t>(Image->getSize())) {
@@ -565,11 +554,6 @@ Error dataSubmitImpl(void *TgtPtr, const void *HstPtr, int64_t Size,
   uint64_t FullAddress = (uint64_t)TgtPtr;
   uint64_t TransferOffset = FullAddress - IVSHMEM_BASE_ADDRESS;
 
-  std::cout << "dataSubmit: TgtPtr=0x" << std::hex << FullAddress 
-            << " (Offset=0x" << TransferOffset << ")"
-            << " HstPtr=" << HstPtr << std::dec
-              << " Size=" << Size << " Value=" 
-              << (Size == sizeof(int) ? *(int*)HstPtr : 0) << std::endl;
   wrChannel->transfer(TransferOffset, HstPtr, (size_t)(Size));
   return Plugin::success();
 }
@@ -684,7 +668,6 @@ private:
                  KernelLaunchParamsTy LaunchParams,
                  AsyncInfoWrapperTy &AsyncInfoWrapper) const {
 
-  std::cout << "Do we happen to get to launch impl" << std::endl;
   // Cast to tbrid device so we can access our methods
   auto *TbirdDevice = static_cast<ThunderbirdDeviceTy *>(&GenericDevice);
 
@@ -693,11 +676,6 @@ private:
   size_t ArgsSize = LaunchParams.Size;
   void *DeviceArgsPtr = nullptr;
 
-  std::cout << "Kernel Data Argument size  " << LaunchParams.Size << std::endl;
-  
- // for(int i = 0; i < LaunchParams.Size / sizeof(int); i++){
- //   std::cout << "Arg "<< i << " val " << ((int *) LaunchParams.Data)[i] << std::endl;
- // }
   if (ArgsSize > 0) {
     DeviceArgsPtr = TbirdDevice->allocate(LaunchParams.Size, nullptr, TARGET_ALLOC_DEVICE);
     if (!DeviceArgsPtr) {
@@ -705,12 +683,6 @@ private:
                            "Failed to allocate device memory for kernel args");
     }
   }
-  std::cout << "LaunchParams.Data hex dump: ";
-for (int i = 0; i < ArgsSize; i++) {
-    std::cout << std::hex << std::setw(2) << std::setfill('0') 
-              << (int)static_cast<uint8_t*>(LaunchParams.Data)[i] << " ";
-}
-std::cout << std::dec << std::endl;
 
   // Copy args to device from host
   if (ArgsSize > 0) {
@@ -731,8 +703,6 @@ std::cout << std::dec << std::endl;
   uint64_t kernel_device_addr = reinterpret_cast<uint64_t>(this->Func);
   //uint64_t args_device_addr = reinterpret_cast<uint64_t>(DeviceArgsPtr);
 
-  std::cout << "At send time, data: " << std::hex <<  ((uint64_t *) LaunchParams.Data)[0] << std::endl;
-  
   if (!MessageUtils::createLaunchCmd(&launch_batch_body[0],
                                    kernel_device_addr,
                                    NumBlocks[0],   // grid_x
@@ -810,14 +780,6 @@ public:
         uint64_t symbol_offset = (uintptr_t)entry->Address - MinVMA;
         uint64_t final_device_address = DeviceImageBase + symbol_offset;
 
-        std::cout << "========> Symbol Information <============= " << std::endl;
-        std::cout << "Symbol: " << SymbolName << std::endl;
-        std::cout << "entry->Address: 0x" << std::hex << (uintptr_t)entry->Address << std::endl;
-        std::cout << "TgtImage->ImageStart: 0x" << std::hex << (uintptr_t)TgtImage->ImageStart << std::endl;
-        std::cout << "symbol_offset: 0x" << std::hex << symbol_offset << std::endl;
-        std::cout << "DeviceImageBase: 0x" << std::hex << DeviceImageBase << std::endl;
-        std::cout << "final_device_address: 0x" << std::hex << final_device_address << std::endl;
-
         // Save absolute device address.
         DeviceGlobal.setPtr((void *)final_device_address);
         return Plugin::success();
@@ -840,7 +802,6 @@ struct ThunderbirdPluginTy final : public GenericPluginTy {
 
   /// Initialize the plugin and return the number of devices.
   Expected<int32_t> initImpl() override {
-	  std::cout << "Initing plugin" << std::endl;
 #ifdef USES_DYNAMIC_FFI
     if (auto Err = Plugin::check(ffi_init(), "failed to initialize libffi"))
       return std::move(Err);
