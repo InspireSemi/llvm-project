@@ -142,6 +142,10 @@ fi
 # ============================================================
 # Phase 2: host libomp (OpenMP runtime), no RPATH tweaks needed on Linux
 # ============================================================
+#AG addition: newly built libs need to be in LD_LIBRARY_PATH (maybe unnecessary with below fixes to use the llvm linker instead of system linker)
+export LD_LIBRARY_PATH=/mnt/raid0/ahgray/omp-review/llvm-install/lib:${LD_LIBRARY_PATH}
+
+
 LIBOMP_SO="$PREFIX/lib/libomp.so"
 if [[ "$(uname)" == "Darwin" ]]; then
   LIBOMP_SO="$PREFIX/lib/libomp.dylib"
@@ -157,6 +161,8 @@ if [[ "$SKIP_LIBOMP" -eq 0 ]]; then
     -DCMAKE_C_COMPILER="$PREFIX/bin/clang" \
     -DCMAKE_CXX_COMPILER="$PREFIX/bin/clang++" \
     -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+    -DCMAKE_EXE_LINKER_FLAGS="-fuse-ld=lld -L$PREFIX/lib" \
+    -DCMAKE_SHARED_LINKER_FLAGS="-fuse-ld=lld -L$PREFIX/lib" \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
   ninja -C "$PHASE2_BUILD" -j"$JOBS" install
 else
@@ -194,6 +200,8 @@ if [[ "$SKIP_OFFLOAD" -eq 0 ]]; then
     -DCMAKE_ASM_COMPILER="$PREFIX/bin/clang"
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
     -DCMAKE_BUILD_TYPE="Debug"
+    -DCMAKE_EXE_LINKER_FLAGS="-fuse-ld=lld -L$PREFIX/lib"
+    -DCMAKE_SHARED_LINKER_FLAGS="-fuse-ld=lld -L$PREFIX/lib"
   )
 
   # Optional tests
