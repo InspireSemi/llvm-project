@@ -711,7 +711,8 @@ private:
                                    NumThreads[0],  // block_x
                                    NumThreads[1],  // block_y
                                    NumThreads[2],  // block_z
-                                   (uint64_t) DeviceArgsPtr)) {           
+                                   (uint64_t) DeviceArgsPtr,
+                                   LaunchParams.Size)) {           
     //TbirdDevice->free(DeviceArgsPtr, TARGET_ALLOC_DEVICE);
     return Plugin::error(ErrorCode::UNKNOWN, "Failed to create launch command");
   }
