@@ -186,3 +186,9 @@ endif()
 if(NOT LLVM_TARGETS_TO_BUILD OR "NVPTX" IN_LIST LLVM_TARGETS_TO_BUILD)
   compileDeviceRTLLibrary(nvptx nvptx64-nvidia-cuda --cuda-feature=+ptx63)
 endif()
+
+if(NOT LLVM_TARGETS_TO_BUILD OR "RISCV" IN_LIST LLVM_TARGETS_TO_BUILD)
+  # Thunderbird is a CPU-based RISC-V accelerator that uses traditional
+  # fork-join parallelism rather than GPU SPMD model
+  compileDeviceRTLLibrary(thunderbird riscv64-inspire-elf -DOMPTARGET_DEVICE_THUNDERBIRD)
+endif()

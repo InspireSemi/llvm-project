@@ -41,6 +41,10 @@
 #include "State.h"
 #include "Synchronization.h"
 
+#ifdef OMPTARGET_DEVICE_THUNDERBIRD
+#include <stdarg.h>
+#endif
+
 using namespace ompx;
 
 namespace {
@@ -308,4 +312,43 @@ void __kmpc_push_num_teams(IdentTy *loc, int32_t tid, int32_t num_teams,
                            int32_t thread_limit) {}
 
 void __kmpc_push_proc_bind(IdentTy *loc, uint32_t tid, int proc_bind) {}
+
+#ifdef OMPTARGET_DEVICE_THUNDERBIRD
+// CPU-style parallelism support for CPU-based accelerators
+// Thunderbird uses traditional fork-join parallelism rather than GPU SPMD model
+
+void __kmpc_push_num_threads(IdentTy *loc, int32_t global_tid,
+                             int32_t num_threads) {
+  // Store the number of threads to use in the next parallel region
+  if (num_threads > 0)
+    icv::NThreads = num_threads;
+}
+
+void __kmpc_fork_call(IdentTy *loc, int32_t argc, void *microtask, ...) {
+  // Traditional fork-join parallelism for CPU-based accelerators
+  // Delegates to __kmpc_parallel_51 which handles thread management
+  
+  void *args[32];
+  if (argc > 32) {
+    printf("__kmpc_fork_call: too many arguments (%d), maximum is 32\n", argc);
+    __builtin_trap();
+  }
+  
+  va_list ap;
+  va_start(ap, microtask);
+  for (int i = 0; i < argc; i++) {
+    args[i] = va_arg(ap, void *);
+  }
+  va_end(ap);
+  
+  int32_t num_threads = icv::NThreads ? icv::NThreads : -1;
+  
+  __kmpc_parallel_51(loc, /*global_tid=*/0, /*if_expr=*/1, num_threads,
+                     /*proc_bind=*/0, microtask, /*wrapper_fn=*/microtask,
+                     args, argc);
+  
+  icv::NThreads = 0;
+}
+#endif // OMPTARGET_DEVICE_THUNDERBIRD
+
 }
