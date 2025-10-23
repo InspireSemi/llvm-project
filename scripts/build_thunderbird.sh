@@ -143,7 +143,7 @@ fi
 # Phase 2: host libomp (OpenMP runtime), no RPATH tweaks needed on Linux
 # ============================================================
 #AG addition: newly built libs need to be in LD_LIBRARY_PATH (maybe unnecessary with below fixes to use the llvm linker instead of system linker)
-export LD_LIBRARY_PATH=/mnt/raid0/ahgray/omp-review/llvm-install/lib:${LD_LIBRARY_PATH}
+#export LD_LIBRARY_PATH=/mnt/raid0/ahgray/omp-review/llvm-install/lib:${LD_LIBRARY_PATH}
 
 
 LIBOMP_SO="$PREFIX/lib/libomp.so"
