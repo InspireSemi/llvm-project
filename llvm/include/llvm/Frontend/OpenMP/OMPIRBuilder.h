@@ -2221,6 +2221,11 @@ public:
   createOffloadMaptypes(SmallVectorImpl<uint64_t> &Mappings,
                         std::string VarName);
 
+  /// Create the global variable holding the offload C types information.
+  LLVM_ABI GlobalVariable *
+  createOffloadCtypes(SmallVectorImpl<uint8_t> &CTypes,
+                      std::string VarName);
+
   /// Create the global variable holding the offload names information.
   LLVM_ABI GlobalVariable *
   createOffloadMapnames(SmallVectorImpl<llvm::Constant *> &Names,
@@ -2269,6 +2274,10 @@ public:
     /// region, or nullptr if there are no separate map types for the region
     /// end.
     Value *MapTypesArrayEnd = nullptr;
+    /// The array of C type information passed to the device runtime for
+    /// each kernel argument, used by the device runtime to interpret argument
+    /// types correctly.
+    Value *CTypesArray = nullptr;
     /// The array of user-defined mappers passed to the runtime library.
     Value *MappersArray = nullptr;
     /// The array of original declaration names of mapped pointers sent to the
@@ -2278,12 +2287,12 @@ public:
     explicit TargetDataRTArgs() {}
     explicit TargetDataRTArgs(Value *BasePointersArray, Value *PointersArray,
                               Value *SizesArray, Value *MapTypesArray,
-                              Value *MapTypesArrayEnd, Value *MappersArray,
-                              Value *MapNamesArray)
+                              Value *MapTypesArrayEnd, Value *CTypesArray,
+                              Value *MappersArray, Value *MapNamesArray)
         : BasePointersArray(BasePointersArray), PointersArray(PointersArray),
           SizesArray(SizesArray), MapTypesArray(MapTypesArray),
-          MapTypesArrayEnd(MapTypesArrayEnd), MappersArray(MappersArray),
-          MapNamesArray(MapNamesArray) {}
+          MapTypesArrayEnd(MapTypesArrayEnd), CTypesArray(CTypesArray),
+          MappersArray(MappersArray), MapNamesArray(MapNamesArray) {}
   };
 
   /// Container to pass the default attributes with which a kernel must be
@@ -2431,6 +2440,7 @@ public:
     MapDeviceInfoArrayTy DevicePointers;
     MapValuesArrayTy Sizes;
     MapFlagsArrayTy Types;
+    SmallVector<omp::OpenMPParamCType, 4> CTypes;
     MapNamesArrayTy Names;
     StructNonContiguousInfo NonContigInfo;
 
@@ -2443,6 +2453,7 @@ public:
                             CurInfo.DevicePointers.end());
       Sizes.append(CurInfo.Sizes.begin(), CurInfo.Sizes.end());
       Types.append(CurInfo.Types.begin(), CurInfo.Types.end());
+      CTypes.append(CurInfo.CTypes.begin(), CurInfo.CTypes.end());
       Names.append(CurInfo.Names.begin(), CurInfo.Names.end());
       NonContigInfo.Dims.append(CurInfo.NonContigInfo.Dims.begin(),
                                 CurInfo.NonContigInfo.Dims.end());
