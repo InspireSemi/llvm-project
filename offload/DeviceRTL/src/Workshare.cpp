@@ -603,6 +603,10 @@ void __kmpc_dispatch_deinit(IdentTy *loc, int32_t tid) { popDST(); }
 // KMP interface implementation (static loops)
 ////////////////////////////////////////////////////////////////////////////////
 
+#ifndef OMPTARGET_DEVICE_THUNDERBIRD
+// GPU targets use NVPTX-style loop distribution
+// Thunderbird uses pthread-based implementations in ThunderbirdWorkshare.cpp
+
 void __kmpc_for_static_init_4(IdentTy *loc, int32_t global_tid,
                               int32_t schedtype, int32_t *plastiter,
                               int32_t *plower, int32_t *pupper,
@@ -682,6 +686,124 @@ void __kmpc_distribute_static_init_8u(IdentTy *loc, int32_t global_tid,
 void __kmpc_for_static_fini(IdentTy *loc, int32_t global_tid) {}
 
 void __kmpc_distribute_static_fini(IdentTy *loc, int32_t global_tid) {}
+
+#else // OMPTARGET_DEVICE_THUNDERBIRD
+//===----------------------------------------------------------------------===//
+// Thunderbird: CPU-based static loop scheduling using pthread thread IDs
+//===----------------------------------------------------------------------===//
+
+// Thread-local state accessors (defined in Parallelism.cpp)
+extern uint32_t __tbird_get_thread_id(void);
+extern uint32_t __tbird_get_team_size(void);
+
+void __kmpc_for_static_init_4(IdentTy *loc, int32_t gtid, int32_t schedtype,
+                               int32_t *plastiter, int32_t *plower,
+                               int32_t *pupper, int32_t *pstride,
+                               int32_t incr, int32_t chunk) {
+  int32_t tid = static_cast<int32_t>(__tbird_get_thread_id());
+  int32_t nth = static_cast<int32_t>(__tbird_get_team_size());
+  
+  printf("[DeviceRTL:for_static_init_4] tid=%d, nth=%d, initial: lower=%d, upper=%d, stride=%d\n",
+         tid, nth, *plower, *pupper, *pstride);
+  
+  int32_t lower = *plower;
+  int32_t upper = *pupper;
+  int32_t stride = *pstride;
+  
+  // Calculate total number of iterations
+  int32_t trip_count = ((upper - lower) / stride) + 1;
+  
+  if (trip_count <= 0) {
+    *plastiter = 0;
+    *plower = lower;
+    *pupper = lower - stride;
+    return;
+  }
+  
+  // Static schedule: divide iterations evenly among threads
+  int32_t chunk_size = trip_count / nth;
+  int32_t remainder = trip_count % nth;
+  
+  // Threads with tid < remainder get one extra iteration
+  int32_t start_iter = tid * chunk_size + ((tid < remainder) ? tid : remainder);
+  int32_t num_iters = chunk_size + ((tid < remainder) ? 1 : 0);
+  
+  *plower = lower + start_iter * stride;
+  *pupper = lower + (start_iter + num_iters - 1) * stride;
+  *plastiter = (tid == nth - 1) ? 1 : 0;
+  
+  printf("[DeviceRTL:for_static_init_4] tid=%d: final bounds lower=%d, upper=%d, num_iters=%d\n",
+         tid, *plower, *pupper, num_iters);
+}
+
+void __kmpc_for_static_init_4u(IdentTy *loc, int32_t gtid, int32_t schedtype,
+                                int32_t *plastiter, uint32_t *plower,
+                                uint32_t *pupper, int32_t *pstride,
+                                int32_t incr, int32_t chunk) {
+  int32_t lower_s = static_cast<int32_t>(*plower);
+  int32_t upper_s = static_cast<int32_t>(*pupper);
+  
+  __kmpc_for_static_init_4(loc, gtid, schedtype, plastiter, &lower_s,
+                           &upper_s, pstride, incr, chunk);
+  
+  *plower = static_cast<uint32_t>(lower_s);
+  *pupper = static_cast<uint32_t>(upper_s);
+}
+
+void __kmpc_for_static_init_8(IdentTy *loc, int32_t gtid, int32_t schedtype,
+                               int32_t *plastiter, int64_t *plower,
+                               int64_t *pupper, int64_t *pstride,
+                               int64_t incr, int64_t chunk) {
+  int32_t tid = static_cast<int32_t>(__tbird_get_thread_id());
+  int32_t nth = static_cast<int32_t>(__tbird_get_team_size());
+  
+  int64_t lower = *plower;
+  int64_t upper = *pupper;
+  int64_t stride = *pstride;
+  
+  int64_t trip_count = ((upper - lower) / stride) + 1;
+  
+  if (trip_count <= 0) {
+    *plastiter = 0;
+    *plower = lower;
+    *pupper = lower - stride;
+    return;
+  }
+  
+  int64_t chunk_size = trip_count / nth;
+  int64_t remainder = trip_count % nth;
+  
+  int64_t start_iter = tid * chunk_size + ((tid < remainder) ? tid : remainder);
+  int64_t num_iters = chunk_size + ((tid < remainder) ? 1 : 0);
+  
+  *plower = lower + start_iter * stride;
+  *pupper = lower + (start_iter + num_iters - 1) * stride;
+  *plastiter = (tid == nth - 1) ? 1 : 0;
+}
+
+void __kmpc_for_static_init_8u(IdentTy *loc, int32_t gtid, int32_t schedtype,
+                                int32_t *plastiter, uint64_t *plower,
+                                uint64_t *pupper, int64_t *pstride,
+                                int64_t incr, int64_t chunk) {
+  int64_t lower_s = static_cast<int64_t>(*plower);
+  int64_t upper_s = static_cast<int64_t>(*pupper);
+  
+  __kmpc_for_static_init_8(loc, gtid, schedtype, plastiter, &lower_s,
+                           &upper_s, pstride, incr, chunk);
+  
+  *plower = static_cast<uint64_t>(lower_s);
+  *pupper = static_cast<uint64_t>(upper_s);
+}
+
+void __kmpc_for_static_fini(IdentTy *loc, int32_t gtid) {
+  // No cleanup needed for static schedule
+}
+
+void __kmpc_distribute_static_fini(IdentTy *loc, int32_t gtid) {
+  // No cleanup needed
+}
+
+#endif // OMPTARGET_DEVICE_THUNDERBIRD
 }
 
 namespace ompx {
