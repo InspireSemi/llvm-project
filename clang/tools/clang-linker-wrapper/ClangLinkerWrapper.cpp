@@ -485,15 +485,50 @@ namespace riscv64{
       "-o",
       *TempFileOrErr,
       Args.MakeArgString("--target=" + Triple.getTriple()),
-      // Don’t let the driver inject crt0.o, -lc, or compiler-rt builtins
-      "-nostdlib",
-      "-nodefaultlibs",
+      // Skip startup files (crt0.o, etc.) as entry point is called via dlopen,
+      // but allow standard library and default libs for Linux toolchain
       "-nostartfiles",
-      "-Xlinker",
-      "-pie",
       "-Wl,--no-undefined",
+      // Create shared objects for dlopen compatibility
+      "-shared",      // Create a shared object (.so)
+      "-fPIC",        // Position-independent code
+      "-fno-pie",     // But not a PIE executable
   };
 
+  // Add device sysroot if provided
+  if (!Args.hasArg(OPT_device_sysroot_EQ))
+    return createStringError("RISC-V offload linking requires --device-sysroot");
+  
+  StringRef DeviceSysroot = Args.getLastArgValue(OPT_device_sysroot_EQ);
+  CmdArgs.push_back(Args.MakeArgString("--sysroot=" + DeviceSysroot));
+      
+  // Add library paths for shared and static libraries in the sysroot
+  CmdArgs.push_back(Args.MakeArgString("-L" + DeviceSysroot + "/lib"));
+  CmdArgs.push_back(Args.MakeArgString("-L" + DeviceSysroot + "/usr/lib"));
+  
+  // Find and add GCC runtime library directory for libgcc.a
+  // Look for usr/lib/<vendor>-<os>/<version>/ pattern
+  // Use the triple without environment (riscv64-inspire-linux, not riscv64-inspire-linux-gnu)
+  std::string TripleDir = (Triple.getArchName() + "-" + 
+                            Triple.getVendorName() + "-" + 
+                            Triple.getOSName()).str();
+  SmallString<128> GccLibPath(DeviceSysroot);
+  sys::path::append(GccLibPath, "usr", "lib", TripleDir);
+  
+  std::error_code EC;
+  bool FoundGccLib = false;
+  for (sys::fs::directory_iterator DI(GccLibPath, EC), DE; !EC && DI != DE; DI.increment(EC)) {
+    if (sys::fs::is_directory(DI->path())) {
+      SmallString<128> LibGccPath(DI->path());
+      sys::path::append(LibGccPath, "libgcc.a");
+      if (sys::fs::exists(LibGccPath)) {
+        CmdArgs.push_back(Args.MakeArgString("-L" + DI->path()));
+        FoundGccLib = true;
+        break;
+      }
+    }
+  }
+  
   CmdArgs.push_back("-fuse-ld=lld");
 
   // Determine whether to pass -march or -mcpu based on the arch string.
@@ -537,7 +572,7 @@ namespace riscv64{
 
   return *TempFileOrErr;
 }
-}
+} // namespace riscv64
 
 namespace generic {
 Expected<StringRef> clang(ArrayRef<StringRef> InputFiles, const ArgList &Args,
@@ -920,6 +955,15 @@ DerivedArgList getLinkerArgs(ArrayRef<OffloadFile> Input,
   for (StringRef Arg : Args.getAllArgValues(OPT_device_linker_args_EQ)) {
     auto [Triple, Value] = Arg.split('=');
     llvm::Triple TT(Triple);
+    
+    // Check if this is a --device-sysroot argument and extract it separately
+    if (Arg.starts_with("--device-sysroot=")) {
+      StringRef SysrootPath = Arg.substr(strlen("--device-sysroot="));
+      DAL.AddJoinedArg(nullptr, Tbl.getOption(OPT_device_sysroot_EQ),
+                       Args.MakeArgString(SysrootPath));
+      continue;
+    }
+    
     // If this isn't a recognized triple then it's an `arg=value` option.
     if (TT.getArch() == Triple::ArchType::UnknownArch)
       DAL.AddJoinedArg(nullptr, Tbl.getOption(OPT_linker_arg_EQ),
