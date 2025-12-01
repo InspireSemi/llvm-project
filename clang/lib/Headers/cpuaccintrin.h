@@ -1,4 +1,4 @@
-//===-- cpuaccintrin.h - CPU accelerator compatibility --------------------===//
+//===-- cpuaccintrin.h - CPU accelerator intrinsics (Linux) ---------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,129 +6,120 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// Provides compatibility definitions for CPU-based accelerators to work with
-// the DeviceRTL infrastructure. This header defines GPU-style attributes and
-// intrinsics in a way that works for traditional CPU architectures.
-//
-// CPU accelerators (like Thunderbird) use traditional threading models and
-// don't have GPU-specific features like address spaces, warps, or SIMT
-// execution. This header provides no-op or CPU-equivalent definitions.
+// Minimal GPU-style intrinsics for CPU-based accelerators running Linux.
+// Unlike GPU targets, this uses native threading (pthreads) instead of
+// hardware warps/SIMT. Compatible with the standard DeviceRTL infrastructure.
 //
 //===----------------------------------------------------------------------===//
 
 #ifndef __CPUACCINTRIN_H
 #define __CPUACCINTRIN_H
 
+#ifndef OMPTARGET_DEVICE_THUNDERBIRD
+#error "cpuaccintrin.h requires OMPTARGET_DEVICE_THUNDERBIRD"
+#endif
+
 #include <stdint.h>
 #include <stdbool.h>
 
-// GPU address space attributes are no-ops for CPU
+// GPU address space qualifiers are no-ops for CPU
 #define __gpu_private
 #define __gpu_constant const
 #define __gpu_local
 #define __gpu_global
 
-// GPU dimension constants for compatibility with DeviceRTL
-// CPU accelerators don't use these but they're referenced in common code
+// Dimension constants (for API compatibility)
 #define __GPU_X_DIM 0
 #define __GPU_Y_DIM 1
 #define __GPU_Z_DIM 2
 
-// Default function attributes for CPU (no special attributes needed)
 #define _DEFAULT_FN_ATTRS static inline __attribute__((always_inline))
 
 //===----------------------------------------------------------------------===//
-// Thread/Block/Grid mapping intrinsics
-// These return runtime values from the OpenMP runtime for CPU execution
+// Thread-local state access (implemented in DeviceRTL)
 //===----------------------------------------------------------------------===//
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-// Forward declare OpenMP runtime functions with C linkage
-int omp_get_thread_num(void);
-int omp_get_num_threads(void);
-int omp_get_team_num(void);
-int omp_get_num_teams(void);
+// Thread management functions implemented in Parallelism.cpp
+uint32_t __tbird_get_thread_id(void);
+uint32_t __tbird_get_team_size(void);
 
 #ifdef __cplusplus
 }
 #endif
 
-// Thread ID within block (uses OpenMP thread number)
+//===----------------------------------------------------------------------===//
+// Thread/Block/Grid Mapping (CPU model: single team, multiple threads)
+//===----------------------------------------------------------------------===//
+
+// Thread ID within block (1D only for CPU)
 _DEFAULT_FN_ATTRS uint32_t __gpu_thread_id_x(void) {
-  return (uint32_t)omp_get_thread_num();
+  return __tbird_get_thread_id();
 }
 
 _DEFAULT_FN_ATTRS uint32_t __gpu_thread_id_y(void) {
-  return 0; // CPU model uses 1D threading
+  return 0;
 }
 
 _DEFAULT_FN_ATTRS uint32_t __gpu_thread_id_z(void) {
-  return 0; // CPU model uses 1D threading
-}
-
-// Thread ID by dimension
-_DEFAULT_FN_ATTRS uint32_t __gpu_thread_id(int __dim) {
-  if (__dim == 0) return (uint32_t)omp_get_thread_num();
   return 0;
 }
 
-// Number of threads in block (uses OpenMP num threads)
+_DEFAULT_FN_ATTRS uint32_t __gpu_thread_id(int __dim) {
+  return (__dim == 0) ? __tbird_get_thread_id() : 0;
+}
+
+// Number of threads in block
 _DEFAULT_FN_ATTRS uint32_t __gpu_num_threads_x(void) {
-  return (uint32_t)omp_get_num_threads();
+  return __tbird_get_team_size();
 }
 
 _DEFAULT_FN_ATTRS uint32_t __gpu_num_threads_y(void) {
-  return 1; // CPU model uses 1D threading
-}
-
-_DEFAULT_FN_ATTRS uint32_t __gpu_num_threads_z(void) {
-  return 1; // CPU model uses 1D threading
-}
-
-// Number of threads by dimension
-_DEFAULT_FN_ATTRS uint32_t __gpu_num_threads(int __dim) {
-  if (__dim == 0) return (uint32_t)omp_get_num_threads();
   return 1;
 }
 
-// Block ID (uses OpenMP team number)
+_DEFAULT_FN_ATTRS uint32_t __gpu_num_threads_z(void) {
+  return 1;
+}
+
+_DEFAULT_FN_ATTRS uint32_t __gpu_num_threads(int __dim) {
+  return (__dim == 0) ? __tbird_get_team_size() : 1;
+}
+
+// Block ID (always 0 - single team model)
 _DEFAULT_FN_ATTRS uint32_t __gpu_block_id_x(void) {
-  return (uint32_t)omp_get_team_num();
-}
-
-_DEFAULT_FN_ATTRS uint32_t __gpu_block_id_y(void) {
-  return 0; // CPU model uses 1D blocks
-}
-
-_DEFAULT_FN_ATTRS uint32_t __gpu_block_id_z(void) {
-  return 0; // CPU model uses 1D blocks
-}
-
-// Block ID by dimension
-_DEFAULT_FN_ATTRS uint32_t __gpu_block_id(int __dim) {
-  if (__dim == 0) return (uint32_t)omp_get_team_num();
   return 0;
 }
 
-// Number of blocks (uses OpenMP num teams)
+_DEFAULT_FN_ATTRS uint32_t __gpu_block_id_y(void) {
+  return 0;
+}
+
+_DEFAULT_FN_ATTRS uint32_t __gpu_block_id_z(void) {
+  return 0;
+}
+
+_DEFAULT_FN_ATTRS uint32_t __gpu_block_id(int __dim) {
+  return 0;
+}
+
+// Number of blocks (always 1 - single team model)
 _DEFAULT_FN_ATTRS uint32_t __gpu_num_blocks_x(void) {
-  return (uint32_t)omp_get_num_teams();
+  return 1;
 }
 
 _DEFAULT_FN_ATTRS uint32_t __gpu_num_blocks_y(void) {
-  return 1; // CPU model uses 1D blocks
+  return 1;
 }
 
 _DEFAULT_FN_ATTRS uint32_t __gpu_num_blocks_z(void) {
-  return 1; // CPU model uses 1D blocks
+  return 1;
 }
 
-// Number of blocks by dimension
 _DEFAULT_FN_ATTRS uint32_t __gpu_num_blocks(int __dim) {
-  if (__dim == 0) return (uint32_t)omp_get_num_teams();
   return 1;
 }
 
