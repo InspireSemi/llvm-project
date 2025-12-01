@@ -529,6 +529,7 @@ void OpenMPIRBuilder::getKernelArgsVector(TargetKernelArgs &KernelArgs,
                 KernelArgs.RTArgs.PointersArray,
                 KernelArgs.RTArgs.SizesArray,
                 KernelArgs.RTArgs.MapTypesArray,
+                KernelArgs.RTArgs.CTypesArray,
                 KernelArgs.RTArgs.MapNamesArray,
                 KernelArgs.RTArgs.MappersArray,
                 KernelArgs.NumIterations,
@@ -1163,12 +1164,63 @@ OpenMPIRBuilder::InsertPointTy OpenMPIRBuilder::emitTargetKernel(
       Builder.CreateAlloca(OpenMPIRBuilder::KernelArgs, nullptr, "kernel_args");
   Builder.restoreIP(Loc.IP);
 
+  // DIAGNOSTIC: Check for field count mismatch
+  unsigned StructFieldCount = OpenMPIRBuilder::KernelArgs->getNumElements();
+  unsigned ArgsVectorSize = KernelArgs.size();
+  
+  // DIAGNOSTIC: Check the actual type of KernelArgsPtr
+  llvm::Type *AllocatedType = KernelArgsPtr->getType();
+  llvm::errs() << "\n===== DETAILED TYPE DIAGNOSTIC =====\n";
+  llvm::errs() << "OpenMPIRBuilder::KernelArgs type:\n  ";
+  OpenMPIRBuilder::KernelArgs->print(llvm::errs());
+  llvm::errs() << "\n  Field count: " << StructFieldCount << "\n";
+  llvm::errs() << "\nKernelArgsPtr type:\n  ";
+  AllocatedType->print(llvm::errs());
+  llvm::errs() << "\n";
+  
+  if (auto *PtrType = dyn_cast<llvm::PointerType>(AllocatedType)) {
+    llvm::errs() << "  KernelArgsPtr is a pointer (opaque mode)\n";
+  }
+  llvm::errs() << "\nArgsVector size: " << ArgsVectorSize << "\n";
+  llvm::errs() << "=====================================\n\n";
+  
+  if (StructFieldCount != ArgsVectorSize) {
+    llvm::errs() << "\n***** WARNING: Field count mismatch detected! *****\n";
+    llvm::errs() << "  Struct field count: " << StructFieldCount << "\n";
+    llvm::errs() << "  ArgsVector size: " << ArgsVectorSize << "\n";
+    llvm::errs() << "  This will cause a crash when accessing field " << StructFieldCount << "\n";
+    llvm::errs() << "*****************************************************\n\n";
+  } else {
+    llvm::dbgs() << "DIAGNOSTIC: Field count OK - Struct has " << StructFieldCount 
+                 << " fields, ArgsVector has " << ArgsVectorSize << " elements\n";
+  }
+
   for (unsigned I = 0, Size = KernelArgs.size(); I != Size; ++I) {
+    llvm::errs() << "DEBUG: About to CreateStructGEP for index " << I << "\n";
     llvm::Value *Arg =
         Builder.CreateStructGEP(OpenMPIRBuilder::KernelArgs, KernelArgsPtr, I);
+    llvm::errs() << "DEBUG: Successfully created GEP for index " << I << "\n";
+    
+    // DIAGNOSTIC: Check the value we're about to store, especially for index 6 (CTypesArray)
+    if (I == 6) {
+      llvm::errs() << "\n===== DIAGNOSTIC: About to store index 6 (CTypesArray) =====\n";
+      llvm::errs() << "  KernelArgs[" << I << "] pointer: " << KernelArgs[I] << "\n";
+      if (KernelArgs[I]) {
+        llvm::errs() << "  Value type: ";
+        KernelArgs[I]->getType()->print(llvm::errs());
+        llvm::errs() << "\n";
+        llvm::errs() << "  Value name: " << KernelArgs[I]->getName() << "\n";
+      } else {
+        llvm::errs() << "  **ERROR: KernelArgs[6] is NULL!**\n";
+      }
+      llvm::errs() << "=============================================================\n\n";
+    }
+    
+    llvm::errs() << "DEBUG: About to CreateAlignedStore for index " << I << "\n";
     Builder.CreateAlignedStore(
         KernelArgs[I], Arg,
         M.getDataLayout().getPrefTypeAlign(KernelArgs[I]->getType()));
+    llvm::errs() << "DEBUG: Successfully stored index " << I << "\n";
   }
 
   SmallVector<Value *> OffloadingArgs{Ident,      DeviceID, NumTeams,
@@ -8044,6 +8096,19 @@ OpenMPIRBuilder::createOffloadMaptypes(SmallVectorImpl<uint64_t> &Mappings,
   return MaptypesArrayGlobal;
 }
 
+GlobalVariable *
+OpenMPIRBuilder::createOffloadCtypes(SmallVectorImpl<uint8_t> &CTypes,
+                                     std::string VarName) {
+  llvm::Constant *CtypesArrayInit =
+      llvm::ConstantDataArray::get(M.getContext(), CTypes);
+  auto *CtypesArrayGlobal = new llvm::GlobalVariable(
+      M, CtypesArrayInit->getType(),
+      /*isConstant=*/true, llvm::GlobalValue::PrivateLinkage, CtypesArrayInit,
+      VarName);
+  CtypesArrayGlobal->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+  return CtypesArrayGlobal;
+}
+
 void OpenMPIRBuilder::createMapperAllocas(const LocationDescription &Loc,
                                           InsertPointTy AllocaIP,
                                           unsigned NumOperands,
@@ -8110,6 +8175,7 @@ void OpenMPIRBuilder::emitOffloadingArraysArgument(IRBuilderBase &Builder,
     RTArgs.PointersArray = ConstantPointerNull::get(VoidPtrPtrTy);
     RTArgs.SizesArray = ConstantPointerNull::get(Int64PtrTy);
     RTArgs.MapTypesArray = ConstantPointerNull::get(Int64PtrTy);
+    RTArgs.CTypesArray = ConstantPointerNull::get(Int64PtrTy);
     RTArgs.MapNamesArray = ConstantPointerNull::get(VoidPtrPtrTy);
     RTArgs.MappersArray = ConstantPointerNull::get(VoidPtrPtrTy);
     return;
@@ -8132,6 +8198,12 @@ void OpenMPIRBuilder::emitOffloadingArraysArgument(IRBuilderBase &Builder,
                                                  : Info.RTArgs.MapTypesArray,
       /*Idx0=*/0,
       /*Idx1=*/0);
+  
+  // Create GEP for C types array (using Int8 type for uint8_t).
+  auto Int8Ty = Type::getInt8Ty(M.getContext());
+  RTArgs.CTypesArray = Builder.CreateConstInBoundsGEP2_32(
+      ArrayType::get(Int8Ty, Info.NumberOfPtrs), Info.RTArgs.CTypesArray,
+      /*Idx0=*/0, /*Idx1=*/0);
 
   // Only emit the mapper information arrays if debug information is
   // requested.
@@ -8608,6 +8680,14 @@ Error OpenMPIRBuilder::emitOffloadingArrays(
   std::string MaptypesName = createPlatformSpecificName({"offload_maptypes"});
   auto *MapTypesArrayGbl = createOffloadMaptypes(Mapping, MaptypesName);
   Info.RTArgs.MapTypesArray = MapTypesArrayGbl;
+
+  // Create the C types array - always constant like map types.
+  SmallVector<uint8_t, 4> CTypesVec;
+  for (auto ctype : CombinedInfo.CTypes)
+    CTypesVec.push_back(static_cast<uint8_t>(ctype));
+  std::string CtypesName = createPlatformSpecificName({"offload_ctypes"});
+  auto *CTypesArrayGbl = createOffloadCtypes(CTypesVec, CtypesName);
+  Info.RTArgs.CTypesArray = CTypesArrayGbl;
 
   // The information types are only built if provided.
   if (!CombinedInfo.Names.empty()) {
@@ -9589,8 +9669,29 @@ void OpenMPIRBuilder::initializeTypes(Module &M) {
   VarName##Ptr = PointerType::getUnqual(Ctx);
 #define OMP_STRUCT_TYPE(VarName, StructName, Packed, ...)                      \
   T = StructType::getTypeByName(Ctx, StructName);                              \
-  if (!T)                                                                      \
+  if (T) {                                                                     \
+    /* DIAGNOSTIC: Validate existing struct has correct field count */         \
+    SmallVector<Type *, 16> ExpectedFields = {__VA_ARGS__};                    \
+    unsigned ExpectedCount = ExpectedFields.size();                            \
+    unsigned ActualCount = T->getNumElements();                                \
+    if (ExpectedCount != ActualCount) {                                        \
+      llvm::errs() << "\n***** Stale struct detected! *****\n";               \
+      llvm::errs() << "  Struct name: " << StructName << "\n";                \
+      llvm::errs() << "  Expected fields: " << ExpectedCount << "\n";         \
+      llvm::errs() << "  Actual fields: " << ActualCount << "\n";            \
+      llvm::errs() << "  Clearing and recreating...\n";                        \
+      llvm::errs() << "**********************************\n\n";              \
+      T->setName("");                                                          \
+      T = nullptr;                                                             \
+    } else {                                                                   \
+      llvm::dbgs() << "DIAGNOSTIC: Reusing struct " << StructName              \
+                   << " with " << ActualCount << " fields\n";                 \
+    }                                                                          \
+  }                                                                            \
+  if (!T) {                                                                    \
+    llvm::dbgs() << "DIAGNOSTIC: Creating new struct " << StructName << "\n"; \
     T = StructType::create(Ctx, {__VA_ARGS__}, StructName, Packed);            \
+  }                                                                            \
   VarName = T;                                                                 \
   VarName##Ptr = PointerType::getUnqual(Ctx);
 #include "llvm/Frontend/OpenMP/OMPKinds.def"
