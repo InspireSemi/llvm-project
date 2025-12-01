@@ -694,6 +694,31 @@ private:
     }
   }
 
+  // Allocate and transfer C types array to device
+  void *DeviceCTypesPtr = nullptr;
+  size_t CTypesSize = 0;
+  if (KernelArgs.ArgCTypes && KernelArgs.NumArgs > 0) {
+    CTypesSize = KernelArgs.NumArgs * sizeof(uint8_t);
+    DeviceCTypesPtr = TbirdDevice->allocate(CTypesSize, nullptr, TARGET_ALLOC_DEVICE);
+    if (!DeviceCTypesPtr) {
+      if (DeviceArgsPtr) {
+        TbirdDevice->free(DeviceArgsPtr, TARGET_ALLOC_DEVICE);
+      }
+      return Plugin::error(ErrorCode::OUT_OF_RESOURCES,
+                           "Failed to allocate device memory for C types array");
+    }
+
+    // Copy C types to device
+    if (auto Err = TbirdDevice->dataSubmitImpl(DeviceCTypesPtr, KernelArgs.ArgCTypes,
+                                                CTypesSize, AsyncInfoWrapper)) {
+      TbirdDevice->free(DeviceCTypesPtr, TARGET_ALLOC_DEVICE);
+      if (DeviceArgsPtr) {
+        TbirdDevice->free(DeviceArgsPtr, TARGET_ALLOC_DEVICE);
+      }
+      return Err;
+    }
+  }
+
 
 
   // Prepare and send the launch command via the mailbox.
@@ -702,6 +727,11 @@ private:
   // 'this->Func' should be addr of kernel
   uint64_t kernel_device_addr = reinterpret_cast<uint64_t>(this->Func);
   //uint64_t args_device_addr = reinterpret_cast<uint64_t>(DeviceArgsPtr);
+  
+  // C types array available at: DeviceCTypesPtr (uint64_t cast for future use)
+  uint64_t ctypes_device_addr = reinterpret_cast<uint64_t>(DeviceCTypesPtr);
+  uint32_t num_args = KernelArgs.NumArgs;
+  // TODO: When launch command message is extended, pass ctypes_device_addr and num_args
 
   if (!MessageUtils::createLaunchCmd(&launch_batch_body[0],
                                    kernel_device_addr,
@@ -740,6 +770,9 @@ private:
     if (auto Err = TbirdDevice->dataRetrieveImpl(LaunchParams.Data, DeviceArgsPtr,
                                                    ArgsSize, AsyncInfoWrapper)) {
       TbirdDevice->free(DeviceArgsPtr, TARGET_ALLOC_DEVICE);
+      if (DeviceCTypesPtr) {
+        TbirdDevice->free(DeviceCTypesPtr, TARGET_ALLOC_DEVICE);
+      }
       return Err;
     }
   }
@@ -747,6 +780,9 @@ private:
   // clean up
   if (ArgsSize > 0) {
       TbirdDevice->free(DeviceArgsPtr, TARGET_ALLOC_DEVICE);
+  }
+  if (DeviceCTypesPtr) {
+      TbirdDevice->free(DeviceCTypesPtr, TARGET_ALLOC_DEVICE);
   }
 
   return Plugin::success();
