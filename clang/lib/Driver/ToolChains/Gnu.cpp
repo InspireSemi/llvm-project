@@ -3370,8 +3370,16 @@ void Generic_ELF::anchor() {}
 
 void Generic_ELF::addClangTargetOptions(const ArgList &DriverArgs,
                                         ArgStringList &CC1Args,
-                                        Action::OffloadKind) const {
+                                        Action::OffloadKind DeviceOffloadKind) const {
   if (!DriverArgs.hasFlag(options::OPT_fuse_init_array,
                           options::OPT_fno_use_init_array, true))
     CC1Args.push_back("-fno-use-init-array");
+  
+  // Add OpenMP device runtime library for offload compilation on RISC-V
+  if (DeviceOffloadKind == Action::OFK_OpenMP && getTriple().isRISCV()) {
+    // For RISC-V OpenMP offloading, link the device runtime library.
+    // Pass the architecture string (like "thunderbird") as the BitcodeSuffix.
+    StringRef Arch = DriverArgs.getLastArgValue(options::OPT_march_EQ);
+    tools::addOpenMPDeviceRTL(getDriver(), DriverArgs, CC1Args, Arch, getTriple(), *this);
+  }
 }
