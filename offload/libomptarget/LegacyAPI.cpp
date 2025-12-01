@@ -87,8 +87,8 @@ EXTERN int __tgt_target_mapper(ident_t *Loc, int64_t DeviceId, void *HostPtr,
                                map_var_info_t *ArgNames, void **ArgMappers) {
   TIMESCOPE_WITH_IDENT(Loc);
   OMPT_IF_BUILT(ReturnAddressSetterRAII RA(__builtin_return_address(0)));
-  KernelArgsTy KernelArgs{1,        ArgNum,   ArgsBase,   Args, ArgSizes,
-                          ArgTypes, ArgNames, ArgMappers, 0,    {},
+  KernelArgsTy KernelArgs{1,        ArgNum,   ArgsBase, Args,    ArgSizes,
+                          ArgTypes, nullptr,  ArgNames, ArgMappers, 0,    {},
                           {},       {},       0};
   return __tgt_target_kernel(Loc, DeviceId, -1, -1, HostPtr, &KernelArgs);
 }
@@ -132,8 +132,8 @@ EXTERN int __tgt_target_teams_mapper(ident_t *Loc, int64_t DeviceId,
                                      int32_t ThreadLimit) {
   TIMESCOPE_WITH_IDENT(Loc);
   OMPT_IF_BUILT(ReturnAddressSetterRAII RA(__builtin_return_address(0)));
-  KernelArgsTy KernelArgs{1,        ArgNum,   ArgsBase,   Args, ArgSizes,
-                          ArgTypes, ArgNames, ArgMappers, 0,    {},
+  KernelArgsTy KernelArgs{1,        ArgNum,   ArgsBase, Args,    ArgSizes,
+                          ArgTypes, nullptr,  ArgNames, ArgMappers, 0,    {},
                           {},       {},       0};
   return __tgt_target_kernel(Loc, DeviceId, NumTeams, ThreadLimit, HostPtr,
                              &KernelArgs);
