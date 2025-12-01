@@ -13,6 +13,7 @@ Options:
   --src <llvm-project>  Path to llvm-project (must have llvm/ openmp/ offload/)
   --jobs N              Parallel jobs (default: #cores)
   --plugin NAME         Next-gen plugin token (default: thunderbird)
+  --sysroot PATH        Path to RISC-V Linux sysroot for DeviceRTL (required for thunderbird)
   --skip-host           Skip Phase 1 (LLVM/Clang/LLD)
   --skip-libomp         Skip Phase 2 (libomp)
   --skip-offload        Skip Phase 3 (offload)
@@ -27,6 +28,7 @@ SRC_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
 PREFIX=""
 JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu || echo 8)"
 PLUGINS="thunderbird"
+DEVICE_SYSROOT=""
 SKIP_HOST=0
 SKIP_LIBOMP=0
 SKIP_OFFLOAD=0
@@ -49,6 +51,10 @@ while [[ $# -gt 0 ]]; do
     ;;
   --plugin)
     PLUGINS="$2"
+    shift 2
+    ;;
+  --sysroot)
+    DEVICE_SYSROOT="$2"
     shift 2
     ;;
   --skip-host)
@@ -87,6 +93,21 @@ done
   usage >&2
   exit 1
 } >&2
+
+# Validate sysroot for thunderbird plugin
+if [[ "$PLUGINS" == *"thunderbird"* && -n "$DEVICE_SYSROOT" ]]; then
+  [[ -d "$DEVICE_SYSROOT" ]] || {
+    echo "ERROR: --sysroot '$DEVICE_SYSROOT' does not exist" >&2
+    exit 1
+  }
+  # Verify it looks like a sysroot (has usr/lib or lib)
+  [[ -d "$DEVICE_SYSROOT/usr/lib" || -d "$DEVICE_SYSROOT/lib" ]] || {
+    echo "WARNING: --sysroot '$DEVICE_SYSROOT' doesn't look like a sysroot (missing usr/lib or lib)" >&2
+  }
+  echo "==> Using device sysroot: $DEVICE_SYSROOT"
+elif [[ "$PLUGINS" == *"thunderbird"* ]]; then
+  echo "WARNING: Building thunderbird plugin without --sysroot. DeviceRTL may fail to find pthread headers." >&2
+fi
 
 need() { command -v "$1" >/dev/null || {
   echo "Missing '$1'" >&2
@@ -204,6 +225,13 @@ if [[ "$SKIP_OFFLOAD" -eq 0 ]]; then
     -DCMAKE_SHARED_LINKER_FLAGS="-fuse-ld=lld -L$PREFIX/lib"
   )
 
+  # Pass sysroot to DeviceRTL compilation if specified
+  if [[ -n "$DEVICE_SYSROOT" ]]; then
+    CMAKE_ARGS+=(
+      -DLIBOMPTARGET_DEVICE_SYSROOT="$DEVICE_SYSROOT"
+    )
+  fi
+
   # Optional tests
   if [[ -n "$LIT_PATH" ]]; then
     CMAKE_ARGS+=(-DOPENMP_LLVM_LIT_EXECUTABLE="$LIT_PATH")
@@ -233,6 +261,21 @@ fi
 echo
 echo "==> DONE"
 echo "Prefix: $PREFIX"
+if [[ -n "$DEVICE_SYSROOT" ]]; then
+  echo "Device sysroot: $DEVICE_SYSROOT"
+fi
 echo "Sanity:"
 echo "  export LIBOMPTARGET_DEBUG=1 LIBOMPTARGET_NEXTGEN_PLUGINS=1"
 echo "  $(find "$PHASE3_BUILD" -type f -name llvm-offload-device-info -perm -111 | head -n1 || echo "<tool in $PHASE3_BUILD/tools/deviceinfo/>") --format=json"
+echo
+if [[ -n "$DEVICE_SYSROOT" ]]; then
+  echo "To compile user code with Thunderbird offload:"
+  echo "  export PATH=$PREFIX/bin:\$PATH"
+  echo "  export LD_LIBRARY_PATH=$PREFIX/lib:\$LD_LIBRARY_PATH"
+  echo "  clang -fopenmp --offload-arch=thunderbird --sysroot='$DEVICE_SYSROOT' your_code.c"
+  echo
+  echo "The --sysroot is REQUIRED for device code compilation (pthread.h, etc.)"
+else
+  echo "WARNING: No sysroot specified. User compilations will need:"
+  echo "  clang -fopenmp --offload-arch=thunderbird --sysroot=/path/to/riscv64-linux-sysroot your_code.c"
+fi
