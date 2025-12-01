@@ -350,6 +350,11 @@ std::string riscv::getRISCVArch(const llvm::opt::ArgList &Args,
     return "rv32imafdc";
   }
 
+  // Thunderbird/Inspire: rv64gc = rv64imafd + c + zicsr + zifencei
+  // Thunderbird (Inspire vendor) uses rv64imafdczicsr_zifencei for Linux targets
+  if (Triple.getVendor() == llvm::Triple::Inspire && Triple.isOSLinux())
+    return "rv64imafdczicsr_zifencei";
+  
   if (Triple.getOS() == llvm::Triple::UnknownOS)
     return "rv64imac";
   if (Triple.isAndroid())
