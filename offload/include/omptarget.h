@@ -86,6 +86,24 @@ enum tgt_map_type {
   OMP_TGT_MAPTYPE_MEMBER_OF       = 0xffff000000000000
 };
 
+/// C type information for kernel parameters.
+/// TODO: Upstream this - needed when device cannot directly call kernel functions
+/// (e.g., separate address spaces requiring marshalling, or FFI-based dispatch).
+enum tgt_param_ctype : uint8_t {
+  OMP_TGT_CTYPE_VOID     = 0,
+  OMP_TGT_CTYPE_INT8     = 1,
+  OMP_TGT_CTYPE_UINT8    = 2,
+  OMP_TGT_CTYPE_INT16    = 3,
+  OMP_TGT_CTYPE_UINT16   = 4,
+  OMP_TGT_CTYPE_INT32    = 5,
+  OMP_TGT_CTYPE_UINT32   = 6,
+  OMP_TGT_CTYPE_INT64    = 7,
+  OMP_TGT_CTYPE_UINT64   = 8,
+  OMP_TGT_CTYPE_FLOAT    = 9,
+  OMP_TGT_CTYPE_DOUBLE   = 10,
+  OMP_TGT_CTYPE_POINTER  = 11,
+};
+
 /// Flags for offload entries.
 enum OpenMPOffloadingDeclareTargetFlags {
   /// Mark the entry global as having a 'link' attribute.
@@ -106,7 +124,7 @@ enum TargetAllocTy : int32_t {
 };
 
 inline KernelArgsTy CTorDTorKernelArgs = {1,       0,       nullptr,   nullptr,
-	     nullptr, nullptr, nullptr,   nullptr,
+	     nullptr, nullptr, nullptr,   nullptr,   nullptr,
 	     0,      {0,0,0},       {1, 0, 0}, {1, 0, 0}, 0};
 
 struct DeviceTy;
