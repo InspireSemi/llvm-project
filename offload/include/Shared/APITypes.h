@@ -90,6 +90,7 @@ struct KernelArgsTy {
   void **ArgPtrs = nullptr;    // Pointer to the argument data.
   int64_t *ArgSizes = nullptr; // Size of the argument data in bytes.
   int64_t *ArgTypes = nullptr; // Type of the data (e.g. to / from).
+  uint8_t *ArgCTypes = nullptr; // C type of each argument (int32, float, ptr, etc).
   void **ArgNames = nullptr;   // Name of the data for debugging, possibly null.
   void **ArgMappers = nullptr; // User-defined mappers, possibly null.
   uint64_t Tripcount =
@@ -109,7 +110,7 @@ static_assert(sizeof(KernelArgsTy().Flags) == sizeof(uint64_t),
               "Invalid struct size");
 static_assert(sizeof(KernelArgsTy) ==
                   (8 * sizeof(int32_t) + 3 * sizeof(int64_t) +
-                   4 * sizeof(void **) + 2 * sizeof(int64_t *)),
+                   4 * sizeof(void **) + 2 * sizeof(int64_t *) + sizeof(uint8_t *)),
               "Invalid struct size");
 
 /// Flat array of kernel launch parameters and their total size.
