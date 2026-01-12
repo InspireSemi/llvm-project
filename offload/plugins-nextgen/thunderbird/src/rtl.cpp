@@ -33,13 +33,8 @@
 #include "llvm/Support/DynamicLibrary.h"
 #include "llvm/BinaryFormat/ELF.h"
 
-// Thunderbird headers
-#include "DataTransferEngineFactory.hpp"
-#include "ThunderbirdRuntime.hpp"
-#include "DataTransferBackend.hpp"
-#include "MailboxUtils.hpp"
-#include "BatchUtils.hpp"
-#include "MessageUtils.hpp"
+// New offload-platform API
+#include "tbird_offload_api.h"
 
 #if !defined(__BYTE_ORDER__) || !defined(__ORDER_LITTLE_ENDIAN__) ||           \
     !defined(__ORDER_BIG_ENDIAN__)
@@ -67,63 +62,6 @@ namespace llvm {
 namespace omp {
 namespace target {
 namespace plugin {
-using response_types = std::variant< std::monostate, launch_rsp_t, malloc_rsp_t, free_rsp_t>;
-
-using namespace BatchUtils;
-
-struct ResponseTypeVisitor {
-   ResponseTypeVisitor() = default;
-
-   template<typename T> void operator()(T & t) {}
-  template<> void operator()(launch_rsp_t & t){
-    if(!MessageUtils::extractPayload(slot, &t)){
-      std::cerr << "Launch extraction failed." << std::endl;
-    }
-    if(t.status == ERR_OK){
-      std::cout << "Launch returned successfully." << std::endl;
-    } else {
-      std::cerr << "Warning: Launch failed with status: "
-                << MessageUtils::getErrorCodeString(t.status) << std::endl;
-    }
-  }
-   template<> void operator()(malloc_rsp_t & t) {
-     is_malloc = true;
-          if(!MessageUtils::extractPayload(slot, &t)){
-                        std::cerr << "Malloc extraction failed." << std::endl;
-                   }
-        if(t.status == ERR_OK){
-                  std::cout << "Malloc returned successfully." << std::endl;
-                }
-         else{
-           std::cerr << "Warning: Malloc failed with status: "
-                     << MessageUtils::getErrorCodeString(t.status) << std::endl;
-           }
-   }
-   template<> void operator()(free_rsp_t & t) {
-        if(!MessageUtils::extractPayload(slot, &t)){
-                        std::cerr << "Free extraction failed." << std::endl;
-                   }
-        if(t.status == ERR_OK){
-                  std::cout << "Free returned successfully." << std::endl;
-                }
-         else{
-           std::cerr << "Warning: Free failed with status: "
-                     << MessageUtils::getErrorCodeString(t.status) << std::endl;
-           }
-         }
-
-   bool is_malloc = false;
-   const message_slot_t *slot;
-
-
-};
-
-response_types process(ResponseTypeVisitor & rtv, response_types & rt, message_slot_t const *slot) {
-   rtv.slot = slot;
-   std::visit(rtv, rt);
-   return rt;
-}
-
 
 /// Forward declarations for all specialized data structures.
 struct ThunderbirdKernelTy;
@@ -230,55 +168,25 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
 
   /// Initialize the device
   Error initImpl(GenericPluginTy &Plugin) override {
-    // Inspect the environment to determine what type of device this is targeting
-    char *tDevice = getenv("THUNDERBIRD_DEVICE");
-    if( tDevice != NULL ){
-      std::string tDeviceStr(tDevice);
-      if( tDeviceStr == "XILINX" ){
-        wrChannel = DataTransferEngineFactory::createWriteChannel(
-          DataTransferBackend::Xilinx,
-          XILINXXdmaDevices::H2C0);
-        rdChannel = DataTransferEngineFactory::createReadChannel(
-          DataTransferBackend::Xilinx,
-          XILINXXdmaDevices::C2H0);
-        MaxNumThreads = THUNDERBIRD_MAX_THREADS_XILINX;
-      }else if( tDeviceStr == "QEMU" ){
-        char *tShmDevice = getenv("THUNDERBIRD_QEMU_SHM");
-        if( tShmDevice == NULL ){
-          return Plugin::error(ErrorCode::INVALID_VALUE,
-                               "invalid thunderbird qemu shm target %s",
-                               tShmDevice);
-        }
-        wrChannel = DataTransferEngineFactory::createWriteChannel(
-          DataTransferBackend::ThunderbirdQEMU,
-          std::string(tShmDevice));
-        rdChannel = DataTransferEngineFactory::createReadChannel(
-          DataTransferBackend::ThunderbirdQEMU,
-          std::string(tShmDevice));
-        MaxNumThreads = THUNDERBIRD_MAX_THREADS_QEMU;
-      }else if( tDeviceStr == "THUNDERBIRD" ){
-        wrChannel = DataTransferEngineFactory::createWriteChannel(
-          DataTransferBackend::Thunderbird,
-          "/dev/null");
-        rdChannel = DataTransferEngineFactory::createReadChannel(
-          DataTransferBackend::Thunderbird,
-          "/dev/null");
-        MaxNumThreads = THUNDERBIRD_MAX_THREADS;
-      }else{
-        return Plugin::error(ErrorCode::UNKNOWN,
-                            "invalid device target %s", tDevice);
-      }
-    }else{
-      // Default to the full Thunderbird platform
-      wrChannel = DataTransferEngineFactory::createWriteChannel(
-        DataTransferBackend::ThunderbirdQEMU,
-        "/dev/shm/ivshmem");
-      rdChannel = DataTransferEngineFactory::createReadChannel(
-        DataTransferBackend::ThunderbirdQEMU,
-        "/dev/shm/ivshmem");
-      MaxNumThreads = THUNDERBIRD_MAX_THREADS;
+    // Get device path from environment or use default
+    const char *device_path = getenv("THUNDERBIRD_DEVICE_PATH");
+    if (!device_path) {
+      device_path = "/dev/tbird0018-0";
     }
-
+    
+    DP("Initializing Thunderbird device: %s\n", device_path);
+    
+    // Initialize context with single mailbox (single-threaded operation)
+    ctx = tbird_init(device_path, 1);
+    if (!ctx) {
+      return Plugin::error(ErrorCode::UNKNOWN,
+                          "Failed to initialize Thunderbird context: device=%s", 
+                          device_path);
+    }
+    
+    DP("Thunderbird context initialized successfully: ctx=%p\n", (void*)ctx);
+    
+    MaxNumThreads = THUNDERBIRD_MAX_THREADS;
     return Plugin::success();
   }
 
@@ -324,86 +232,17 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
   // TODO: use the Thunderbird API to load the implementation into memory
   Expected<DeviceImageTy *> loadBinaryImpl(const __tgt_device_image *TgtImage,
                                            int32_t ImageId) override {
-    // Allocate and initialize the image object.
-    // Unclear where this allocation is happening.
-    // Given Plugin is genericpluginty, may be
-    // https://github.com/InspireSemi/llvm-project/blob/ff40aa09c34073806265cb98f58d5a3ab13f551b/offload/plugins-nextgen/common/include/PluginInterface.h#L1197
-    // This allocation seemingly does nothing to the card memory, looking at the
-    // CUDA workflow. This appears to be a host-side allocation.
+    DP("loadBinaryImpl: Phase 1 stub (ImageId=%d)\n", ImageId);
+    return Plugin::error(ErrorCode::UNKNOWN, "loadBinaryImpl not yet implemented (Phase 1)");
+    
+    // Old code below - will be replaced in Phase 3
+    /*
     ThunderbirdDeviceImageTy *Image = Plugin.allocate<ThunderbirdDeviceImageTy>();
     new (Image) ThunderbirdDeviceImageTy(ImageId, *this, TgtImage);
-
-    std::vector<message_slot_t> malloc_batch_body(1);
-      if (!MessageUtils::createMallocCmd(&malloc_batch_body[0], Image->getSize())) {
-            std::cerr << "Error: Failed to create malloc command" << std::endl;
-           return Plugin::error(ErrorCode::UNKNOWN, "Couldn't make a malloc message.");
-      }
-      std::vector<std::pair<int, message_slot_t>> malloc_batch;
-      if (!create_command_batch(malloc_batch_body, 0, malloc_batch)) {
-            std::cerr << "Error: Failed to create free batch" << std::endl;
-           return Plugin::error(ErrorCode::UNKNOWN, "Couldn't make a malloc batch.");
-      }
-
-      for(const auto& [slot_index, _] : malloc_batch){
-        MailboxUtils::clearD2HSlot(*wrChannel, slot_index);
-      }
-      for (const auto& [slot_index, slot] : malloc_batch) {
-            if (!MailboxUtils::writeH2DMessage(*wrChannel, slot_index, &slot)) {
-                std::cerr << "Error: Failed to write malloc batch slot " << slot_index << std::endl;
-           return Plugin::error(ErrorCode::UNKNOWN, "Couldn't write malloc batch to slot.");
-            }
-      }
-      std::vector<std::pair<int, message_slot_t>> respSlots;
-      std::vector<std::pair<int, message_slot_t>> respBatch;
-     // if(!tbird_resp_wait(malloc_batch, rdChannel, respSlots, respBatch)){
-     if(!waitForResponseBatch(*rdChannel, malloc_batch, respBatch, respSlots)){
-           // return nullptr;
-           return Plugin::error(ErrorCode::UNKNOWN, "Getting a response back did not work.");
-      }
-
-      uintptr_t min_addr = (uintptr_t)TgtImage->ImageStart;
-      for (auto *entry = TgtImage->EntriesBegin; entry != TgtImage->EntriesEnd; ++entry) {
-        if (entry->Size == 0) { // We found a function symbol
-          min_addr = std::min(min_addr, (uintptr_t)entry->Address);
-        }
-      }
-      Image->MinVMA = min_addr;
-
-      size_t extra_bytes = (uintptr_t)TgtImage->ImageStart - min_addr;
-      size_t total_size = Image->getSize() + extra_bytes;
-      std::map<uint64_t, response_types> response_lut = {
-        { MSG_RSP_LAUNCH, response_types{launch_rsp_t{}} },
-        { MSG_RSP_MALLOC, response_types{malloc_rsp_t{}} },
-        { MSG_RSP_FREE, response_types{free_rsp_t{}} }
-      };
-
-      auto const response_lut_end = response_lut.end();
-
-      auto response_lut_itr = response_lut.begin();
-
-      ResponseTypeVisitor rtv{};
-
-      malloc_rsp_t m_resp;
-      for( const auto& [slot_index, slot] : respSlots) {
-        response_lut_itr = response_lut.find(slot.msg_id);
-        if(response_lut_itr != response_lut_end) {
-          m_resp = std::get<malloc_rsp_t>(process(rtv, response_lut_itr->second, &slot));
-        }
-      }
-      uint64_t ImageLoc = (uint64_t) m_resp.address;
-      for (const auto& [clear_slot_idx, _] : respBatch) {
-            MailboxUtils::clearD2HSlot(*wrChannel, clear_slot_idx);
-      }
-
-    int64_t written = wrChannel->transfer(ImageLoc - IVSHMEM_BASE_ADDRESS, TgtImage->ImageStart, Image->getSize());
-    if (written != static_cast<int64_t>(Image->getSize())) {
-        std::cerr << "Error: Failed to write flat binary to device memory (written=" << written << ")" << std::endl;
-           return Plugin::error(ErrorCode::UNKNOWN, "Couldn't write Image to device memory.");
-      //  return false;
-    }
-
+    ... old message batch malloc code ...
     Image->setBaseImageAddress(ImageLoc);
     return Image;
+    */
   }
 
   /// Allocate memory. Use std::malloc in all cases.
@@ -418,59 +257,10 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     case TARGET_ALLOC_DEVICE:
     case TARGET_ALLOC_SHARED:
     case TARGET_ALLOC_DEVICE_NON_BLOCKING:
-     {
-      std::vector<message_slot_t> malloc_batch_body(1);
-      if (!MessageUtils::createMallocCmd(&malloc_batch_body[0], Size)) {
-            std::cerr << "Error: Failed to create malloc command" << std::endl;
-            return nullptr;
+      {
+        DP("allocate: Phase 1 stub (size=%zu)\n", Size);
+        return nullptr;  // Stub for Phase 1
       }
-      std::vector<std::pair<int, message_slot_t>> malloc_batch;
-      if (!create_command_batch(malloc_batch_body, 0, malloc_batch)) {
-            std::cerr << "Error: Failed to create free batch" << std::endl;
-            return nullptr;
-      }
-
-      for(const auto& [slot_index, _] : malloc_batch){
-        MailboxUtils::clearD2HSlot(*wrChannel, slot_index);
-      }
-      for (const auto& [slot_index, slot] : malloc_batch) {
-            if (!MailboxUtils::writeH2DMessage(*wrChannel, slot_index, &slot)) {
-                std::cerr << "Error: Failed to write free batch slot " << slot_index << std::endl;
-                return nullptr;
-            }
-      }
-      std::vector<std::pair<int, message_slot_t>> respSlots;
-      std::vector<std::pair<int, message_slot_t>> respBatch;
-      //if(!tbird_resp_wait(malloc_batch, rdChannel, respSlots, respBatch)){
-      if(!waitForResponseBatch(*rdChannel, malloc_batch, respBatch, respSlots)){
-            return nullptr;
-      }
-
-      std::map<uint64_t, response_types> response_lut = {
-        { MSG_RSP_LAUNCH, response_types{launch_rsp_t{}} },
-        { MSG_RSP_MALLOC, response_types{malloc_rsp_t{}} },
-        { MSG_RSP_FREE, response_types{free_rsp_t{}} }
-      };
-
-      auto const response_lut_end = response_lut.end();
-
-      auto response_lut_itr = response_lut.begin();
-
-      ResponseTypeVisitor rtv{};
-
-      malloc_rsp_t m_resp;
-      for( const auto& [slot_index, slot] : respSlots) {
-        response_lut_itr = response_lut.find(slot.msg_id);
-        if(response_lut_itr != response_lut_end) {
-          m_resp = std::get<malloc_rsp_t>(process(rtv, response_lut_itr->second, &slot));
-        }
-      }
-      MemAlloc = (void *)m_resp.address;
-      for (const auto& [clear_slot_idx, _] : respBatch) {
-            MailboxUtils::clearD2HSlot(*wrChannel, clear_slot_idx);
-      }
-      break;
-     }
     case TARGET_ALLOC_HOST:
       MemAlloc = std::malloc(Size);
       break;
@@ -481,56 +271,20 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
   /// Free the memory. Use std::free in all cases.
   // TODO: switch the free below for the target free
   int free(void *TgtPtr, TargetAllocTy Kind) override {
-    std::vector<message_slot_t> free_batch_body(1);
-    if (!MessageUtils::createFreeCmd(&free_batch_body[0], (uint64_t) TgtPtr)) {
-            std::cerr << "Error: Failed to create free command" << std::endl;
-            return false;
+    switch (Kind) {
+    case TARGET_ALLOC_DEFAULT:
+    case TARGET_ALLOC_DEVICE:
+    case TARGET_ALLOC_SHARED:
+    case TARGET_ALLOC_DEVICE_NON_BLOCKING:
+      {
+        DP("free: Phase 1 stub (ptr=%p)\n", TgtPtr);
+        return OFFLOAD_FAIL;  // Stub for Phase 1
+      }
+    case TARGET_ALLOC_HOST:
+      std::free(TgtPtr);
+      return OFFLOAD_SUCCESS;
     }
-    std::vector<std::pair<int, message_slot_t>> free_batch;
-     if (!create_command_batch(free_batch_body, 0, free_batch)) {
-            std::cerr << "Error: Failed to create free batch" << std::endl;
-            return false;
-    }
-
-    for(const auto& [slot_index, _] : free_batch){
-      MailboxUtils::clearD2HSlot(*wrChannel, slot_index);
-    }
-    for (const auto& [slot_index, slot] : free_batch) {
-            if (!MailboxUtils::writeH2DMessage(*wrChannel, slot_index, &slot)) {
-                std::cerr << "Error: Failed to write free batch slot " << slot_index << std::endl;
-                return false;
-            }
-    }
-    std::vector<std::pair<int, message_slot_t>> respSlots;
-    std::vector<std::pair<int, message_slot_t>> respBatch;
-    //if(!tbird_resp_wait(free_batch, rdChannel, respSlots, respBatch)){
-    if(!waitForResponseBatch(*rdChannel, free_batch, respBatch, respSlots)){
-	    return false;
-    }
-
-    std::map<uint64_t, response_types> response_lut = {
-      { MSG_RSP_LAUNCH, response_types{launch_rsp_t{}} },
-      { MSG_RSP_MALLOC, response_types{malloc_rsp_t{}} },
-      { MSG_RSP_FREE, response_types{free_rsp_t{}} }
-    };
-
-    auto const response_lut_end = response_lut.end();
-
-    auto response_lut_itr = response_lut.begin();
-
-    ResponseTypeVisitor rtv{};
-
-    for( const auto& [slot_index, slot] : respSlots) {
-       response_lut_itr = response_lut.find(slot.msg_id);
-       if(response_lut_itr != response_lut_end) {
-          process(rtv, response_lut_itr->second, &slot);
-       }
-    }
-    for (const auto& [clear_slot_idx, _] : respBatch) {
-            MailboxUtils::clearD2HSlot(*wrChannel, clear_slot_idx);
-    }
-
-    return OFFLOAD_SUCCESS;
+    return OFFLOAD_FAIL;
   }
 
   /// This plugin does nothing to lock buffers. Do not return an error, just
@@ -551,20 +305,15 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
 
 Error dataSubmitImpl(void *TgtPtr, const void *HstPtr, int64_t Size,
                      AsyncInfoWrapperTy &AsyncInfoWrapper) override {
-  uint64_t FullAddress = (uint64_t)TgtPtr;
-  uint64_t TransferOffset = FullAddress - IVSHMEM_BASE_ADDRESS;
-
-  wrChannel->transfer(TransferOffset, HstPtr, (size_t)(Size));
-  return Plugin::success();
+  DP("dataSubmit: Phase 1 stub (size=%ld)\n", Size);
+  return Plugin::error(ErrorCode::UNKNOWN, "dataSubmitImpl not yet implemented (Phase 1)");
 }
 
   /// Retrieve data from the device (device to host transfer).
   Error dataRetrieveImpl(void *HstPtr, const void *TgtPtr, int64_t Size,
                          AsyncInfoWrapperTy &AsyncInfoWrapper) override {
-  uint64_t FullAddress = (uint64_t)TgtPtr;
-  uint64_t TransferOffset = FullAddress - IVSHMEM_BASE_ADDRESS;
-  rdChannel->transfer(TransferOffset, HstPtr, (size_t)(Size));
-  return Plugin::success();
+    DP("dataRetrieve: Phase 1 stub (size=%ld)\n", Size);
+    return Plugin::error(ErrorCode::UNKNOWN, "dataRetrieveImpl not yet implemented (Phase 1)");
   }
 
   /// Exchange data between two devices within the plugin. This function is not
@@ -644,9 +393,16 @@ Error dataSubmitImpl(void *TgtPtr, const void *HstPtr, int64_t Size,
   }
   Error setDeviceHeapSize(uint64_t Value) override { return Plugin::success(); }
 
-  // FIXME: Need to either implement getters and setters for channels or confirm they can be public
-  std::unique_ptr<DataTransferEngineWriteBase> wrChannel;
-  std::unique_ptr<DataTransferEngineReadBase> rdChannel;
+  // FIXME: Old channel members - will be removed in Phase 5
+  // std::unique_ptr<DataTransferEngineWriteBase> wrChannel;
+  // std::unique_ptr<DataTransferEngineReadBase> rdChannel;
+
+  /// New offload-platform API context
+  tbird_context_t ctx = nullptr;
+
+  /// Buffer registry: maps host pointers to buffer handles
+  std::unordered_map<void*, tbird_buffer_t> address_to_buffer;
+
 private:
   /// Grid values for Thunderbird plugins.
   static constexpr GV ThunderbirdGridValues = {
@@ -667,7 +423,11 @@ private:
                  uint32_t NumBlocks[3], KernelArgsTy &KernelArgs,
                  KernelLaunchParamsTy LaunchParams,
                  AsyncInfoWrapperTy &AsyncInfoWrapper) const {
-
+  DP("launchImpl: Phase 1 stub\n");
+  return Plugin::error(ErrorCode::UNKNOWN, "launchImpl not yet implemented (Phase 1)");
+  
+  // Old code below - will be replaced in Phase 4
+  /*
   // Cast to tbrid device so we can access our methods
   auto *TbirdDevice = static_cast<ThunderbirdDeviceTy *>(&GenericDevice);
 
@@ -777,15 +537,9 @@ private:
     }
   }
 
-  // clean up
-  if (ArgsSize > 0) {
-      TbirdDevice->free(DeviceArgsPtr, TARGET_ALLOC_DEVICE);
-  }
-  if (DeviceCTypesPtr) {
-      TbirdDevice->free(DeviceCTypesPtr, TARGET_ALLOC_DEVICE);
-  }
-
+  // Old launch code ends here
   return Plugin::success();
+  */
 }
 
 class ThunderbirdGlobalHandlerTy final : public GenericGlobalHandlerTy {
