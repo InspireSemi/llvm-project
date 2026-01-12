@@ -3,6 +3,27 @@ add_target_library(omptarget.rtl.thunderbird THUNDERBIRD)
 
 target_sources(omptarget.rtl.thunderbird PRIVATE src/rtl.cpp)
 
+# Offload platform integration (optional)
+set(OFFLOAD_PLATFORM_PATH "" CACHE PATH "Path to offload-platform repository")
+if(OFFLOAD_PLATFORM_PATH)
+  message(STATUS "Using offload-platform from: ${OFFLOAD_PLATFORM_PATH}")
+  target_include_directories(omptarget.rtl.thunderbird PRIVATE
+    ${OFFLOAD_PLATFORM_PATH}/simplified-api/include
+    ${OFFLOAD_PLATFORM_PATH}/include
+  )
+  # Link against libtbird_host.so
+  if(EXISTS "${OFFLOAD_PLATFORM_PATH}/simplified-api/host/libtbird_host.so")
+    target_link_libraries(omptarget.rtl.thunderbird PRIVATE
+      ${OFFLOAD_PLATFORM_PATH}/simplified-api/host/libtbird_host.so
+    )
+    message(STATUS "Linked against libtbird_host.so")
+  else()
+    message(WARNING "libtbird_host.so not found at ${OFFLOAD_PLATFORM_PATH}/simplified-api/host/")
+  endif()
+else()
+  message(STATUS "OFFLOAD_PLATFORM_PATH not set - building without offload-platform integration")
+endif()
+
 # TODO: add logic to go find the ZephyrSDK
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/utils/host-runtime/DataTransferEngine")
