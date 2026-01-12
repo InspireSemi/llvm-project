@@ -22,6 +22,14 @@
 .sw?
 #OS X specific files.
 .DS_store
+# Object files
+*.o
+# ELF executables
+*.elf
+# LLVM IR files
+*.ll
+# Disk image files
+*.img
 
 # Ignore the user specified CMake presets in subproject directories.
 /*/CMakeUserPresets.json
