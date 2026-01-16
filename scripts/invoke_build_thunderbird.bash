@@ -11,7 +11,10 @@
 #   - SDK: $(riscv64-unknown-linux-gnu-gcc -print-sysroot)
 
 # Use Yocto SDK sysroot (built with bitbake meta-toolchain or similar)
-SYSROOT="/mnt/localstore/tcl_demo/riscv-inspire/build/sdk/sysroots/riscv64-inspire-linux"
+SYSROOT="/mnt/localstore/oecore-x86_64/sysroots/riscv64-inspire-linux/"
+
+# Offload platform path for API integration
+OFFLOAD_PLATFORM="/mnt/localstore/offload/offload-platform"
 
 # Validate it's actually a Linux sysroot
 if [[ ! -f "$SYSROOT/usr/include/pthread.h" ]]; then
@@ -24,7 +27,9 @@ echo "Using Linux sysroot: $SYSROOT"
 echo "Verifying: $(file "$SYSROOT/usr/include/pthread.h" 2>/dev/null || echo 'found')"
 
 ./scripts/build_thunderbird.sh \
-  --prefix /mnt/localstore/tcl_demo/llvm-project/myinstall \
+  --prefix /mnt/localstore/offload/llvm-project/myinstall \
   --src ./ \
-  --jobs 32 \
-  --sysroot "$SYSROOT"
+  --jobs 24 \
+  --sysroot "$SYSROOT" \
+  --offload-platform-path "$OFFLOAD_PLATFORM" \
+  --skip-host
