@@ -1,7 +1,7 @@
 #!/bin/bash
 
-LLVM_INSTALL_DIR=/mnt/localstore/tcl_demo/llvm-project/myinstall
-DEVICE_SYSROOT=/mnt/localstore/tcl_demo/riscv-inspire/build/sdk/sysroots/riscv64-inspire-linux
+LLVM_INSTALL_DIR=/mnt/localstore/offload/llvm-project/myinstall
+DEVICE_SYSROOT=/mnt/localstore/oecore-x86_64/sysroots/riscv64-inspire-linux
 
 echo "Building OpenMP offload tests for Thunderbird"
 
@@ -20,7 +20,7 @@ fi
 
 cd tests_staging
 
-files=( *.c )
+files=( saxpy_parallel.c )
 
 for file in "${files[@]}"; do
   base_name="${file%.c}"
@@ -76,6 +76,7 @@ for file in "${files[@]}"; do
   # Stage 3: Link executable
   echo "Stage 3: Linking executable..."
   ${LLVM_INSTALL_DIR}/bin/clang \
+    -v \
     -L${LLVM_INSTALL_DIR}/lib \
     -I${LLVM_INSTALL_DIR}/include \
     -fPIC \
@@ -87,6 +88,13 @@ for file in "${files[@]}"; do
   
   if [ $? -eq 0 ] && [ -f "${base_name}.elf" ]; then
     echo "✓ Executable linked: ${base_name}.elf"
+    # Verify host architecture
+    if ${LLVM_INSTALL_DIR}/bin/llvm-readelf -h "${base_name}.elf" 2>/dev/null | grep -q "Machine:.*X86-64"; then
+      echo "  ✓ Host executable is x86_64"
+    else
+      echo "  ⚠ WARNING: Unexpected host architecture:"
+      ${LLVM_INSTALL_DIR}/bin/llvm-readelf -h "${base_name}.elf" 2>/dev/null | grep Machine
+    fi
     # Validate executable has offload section
     if ${LLVM_INSTALL_DIR}/bin/llvm-readelf -S "${base_name}.elf" 2>/dev/null | grep -q ".llvm.offloading"; then
       echo "  ✓ Contains embedded device code"
@@ -99,17 +107,19 @@ for file in "${files[@]}"; do
     continue
   fi
   
-  # Stage 4: Extract device image from object file
-  echo "Stage 4: Extracting device image..."
+  # Stage 4: Extract device image from linked executable (contains ET_DYN shared library)
+  echo "Stage 4: Extracting device image from linked executable..."
   bundle_file="${base_name}.bundle"
   device_img="${base_name}.riscv64.img"
   
+  # Extract from .elf (linked by clang-linker-wrapper with -shared flag)
+  # not from .o (which contains pre-linked ET_REL code)
   ${LLVM_INSTALL_DIR}/bin/llvm-objcopy \
     --dump-section=.llvm.offloading="${bundle_file}" \
-    "${base_name}.o"
+    "${base_name}.elf"
   
   if [ $? -eq 0 ] && [ -f "${bundle_file}" ]; then
-    echo "✓ Bundle extracted from object file"
+    echo "✓ Bundle extracted from linked executable"
     
     # Unpack device image using clang-offload-packager
     ${LLVM_INSTALL_DIR}/bin/clang-offload-packager \
@@ -120,9 +130,18 @@ for file in "${files[@]}"; do
       echo "✓ Device image extracted: ${device_img}"
       ls -lh "${device_img}"
       
-      # Verify it's a valid RISC-V ELF
+      # Verify it's a valid RISC-V ELF and check if it's already ET_DYN
       if ${LLVM_INSTALL_DIR}/bin/llvm-readelf -h "${device_img}" 2>/dev/null | grep -q "RISC-V"; then
-        echo "  ✓ Verified valid RISC-V ELF"
+        # Check ELF type
+        if ${LLVM_INSTALL_DIR}/bin/llvm-readelf -h "${device_img}" 2>/dev/null | grep -q "Type:.*DYN"; then
+          echo "  ✓ Already ET_DYN shared object (clang-linker-wrapper worked!)"
+          echo "  ✓ Ready for dlopen"
+        else
+          echo "  ⚠ ELF Type is not DYN (clang-linker-wrapper may not have been invoked)"
+          ${LLVM_INSTALL_DIR}/bin/llvm-readelf -h "${device_img}" 2>/dev/null | grep Type
+          echo "  → This may cause dlopen to fail with 'only ET_DYN and ET_EXEC can be loaded'"
+        fi
+        
         rm -f "${bundle_file}"  # Clean up intermediate bundle
       else
         echo "  ✗ WARNING: Extracted image is not a valid RISC-V ELF file"
@@ -132,7 +151,8 @@ for file in "${files[@]}"; do
       echo "✗ FAILED to extract device image with clang-offload-packager"
     fi
   else
-    echo "✗ FAILED to extract offload bundle section from object file"
+    echo "✗ FAILED to extract offload bundle section from linked executable"
+    echo "   Note: Extracting from .elf (not .o) to get clang-linker-wrapper output"
   fi
   
   # Summary
