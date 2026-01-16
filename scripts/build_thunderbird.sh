@@ -14,6 +14,7 @@ Options:
   --jobs N              Parallel jobs (default: #cores)
   --plugin NAME         Next-gen plugin token (default: thunderbird)
   --sysroot PATH        Path to RISC-V Linux sysroot for DeviceRTL (required for thunderbird)
+  --offload-platform-path PATH  Path to offload-platform repository (for API integration)
   --skip-host           Skip Phase 1 (LLVM/Clang/LLD)
   --skip-libomp         Skip Phase 2 (libomp)
   --skip-offload        Skip Phase 3 (offload)
@@ -29,6 +30,7 @@ PREFIX=""
 JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu || echo 8)"
 PLUGINS="thunderbird"
 DEVICE_SYSROOT=""
+OFFLOAD_PLATFORM_PATH=""
 SKIP_HOST=0
 SKIP_LIBOMP=0
 SKIP_OFFLOAD=0
@@ -55,6 +57,10 @@ while [[ $# -gt 0 ]]; do
     ;;
   --sysroot)
     DEVICE_SYSROOT="$2"
+    shift 2
+    ;;
+  --offload-platform-path)
+    OFFLOAD_PLATFORM_PATH="$2"
     shift 2
     ;;
   --skip-host)
@@ -107,6 +113,26 @@ if [[ "$PLUGINS" == *"thunderbird"* && -n "$DEVICE_SYSROOT" ]]; then
   echo "==> Using device sysroot: $DEVICE_SYSROOT"
 elif [[ "$PLUGINS" == *"thunderbird"* ]]; then
   echo "WARNING: Building thunderbird plugin without --sysroot. DeviceRTL may fail to find pthread headers." >&2
+fi
+
+# Validate offload-platform path if provided
+if [[ -n "$OFFLOAD_PLATFORM_PATH" ]]; then
+  [[ -d "$OFFLOAD_PLATFORM_PATH" ]] || {
+    echo "ERROR: --offload-platform-path '$OFFLOAD_PLATFORM_PATH' does not exist" >&2
+    exit 1
+  }
+  [[ -d "$OFFLOAD_PLATFORM_PATH/simplified-api/include" ]] || {
+    echo "ERROR: --offload-platform-path '$OFFLOAD_PLATFORM_PATH' missing simplified-api/include" >&2
+    exit 1
+  }
+  echo "==> Using offload-platform from: $OFFLOAD_PLATFORM_PATH"
+  # Check if libtbird_host.so exists
+  if [[ -f "$OFFLOAD_PLATFORM_PATH/simplified-api/host/libtbird_host.so" ]]; then
+    echo "    Found libtbird_host.so"
+  else
+    echo "    WARNING: libtbird_host.so not found - you may need to build it first"
+    echo "             cd $OFFLOAD_PLATFORM_PATH/simplified-api/host && make"
+  fi
 fi
 
 need() { command -v "$1" >/dev/null || {
@@ -229,6 +255,13 @@ if [[ "$SKIP_OFFLOAD" -eq 0 ]]; then
   if [[ -n "$DEVICE_SYSROOT" ]]; then
     CMAKE_ARGS+=(
       -DLIBOMPTARGET_DEVICE_SYSROOT="$DEVICE_SYSROOT"
+    )
+  fi
+
+  # Pass offload-platform path if specified
+  if [[ -n "$OFFLOAD_PLATFORM_PATH" ]]; then
+    CMAKE_ARGS+=(
+      -DOFFLOAD_PLATFORM_PATH="$OFFLOAD_PLATFORM_PATH"
     )
   fi
 
