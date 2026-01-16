@@ -3,7 +3,7 @@ add_target_library(omptarget.rtl.thunderbird THUNDERBIRD)
 
 target_sources(omptarget.rtl.thunderbird PRIVATE src/rtl.cpp)
 
-# Offload platform integration (optional)
+# Offload platform integration (required - Phase 5 cleanup complete)
 set(OFFLOAD_PLATFORM_PATH "" CACHE PATH "Path to offload-platform repository")
 if(OFFLOAD_PLATFORM_PATH)
   message(STATUS "Using offload-platform from: ${OFFLOAD_PLATFORM_PATH}")
@@ -18,30 +18,17 @@ if(OFFLOAD_PLATFORM_PATH)
     )
     message(STATUS "Linked against libtbird_host.so")
   else()
-    message(WARNING "libtbird_host.so not found at ${OFFLOAD_PLATFORM_PATH}/simplified-api/host/")
+    message(FATAL_ERROR "libtbird_host.so not found at ${OFFLOAD_PLATFORM_PATH}/simplified-api/host/ - required for new API")
   endif()
 else()
-  message(STATUS "OFFLOAD_PLATFORM_PATH not set - building without offload-platform integration")
+  message(FATAL_ERROR "OFFLOAD_PLATFORM_PATH must be set for offload-platform API integration")
 endif()
 
 # TODO: add logic to go find the ZephyrSDK
 
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/utils/host-runtime/DataTransferEngine")
-  add_subdirectory(utils/host-runtime/DataTransferEngine)
-  target_link_libraries(omptarget.rtl.thunderbird PRIVATE DataTransferEngine)
-  target_include_directories(omptarget.rtl.thunderbird PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/utils/host-runtime/DataTransferEngine)
-else()
-  message(FATAL_ERROR "Cannot find thunderbird/utils/host-runtime/DataTransferEngine libary")
-endif()
-
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/utils/host-runtime/ThunderbirdHostRuntime")
-  add_subdirectory(utils/host-runtime/ThunderbirdHostRuntime)
-  target_link_libraries(omptarget.rtl.thunderbird PRIVATE ThunderbirdHostRuntime)
-else()
-  message(FATAL_ERROR "Cannot find thunderbird/utils/host-runtime/ThunderbirdHostRuntime libary")
-endif()
-
+# Phase 5: Removed old message-based infrastructure dependencies
+# - DataTransferEngine (replaced by tbird_offload_api.h)
+# - ThunderbirdHostRuntime (replaced by libtbird_host.so)
 
 target_include_directories(omptarget.rtl.thunderbird PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/utils
