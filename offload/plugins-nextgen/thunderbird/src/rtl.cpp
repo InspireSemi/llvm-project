@@ -812,405 +812,388 @@ Error ThunderbirdKernelTy::initImpl(GenericDeviceTy &Device, DeviceImageTy &Imag
   return Plugin::success();
 }
 
+//===----------------------------------------------------------------------===//
+// Argument Conversion Helpers for launchImpl
+//===----------------------------------------------------------------------===//
+
+/// Context passed to argument conversion helpers
+struct ArgConversionContext {
+  ThunderbirdDeviceTy *Device;
+  KernelArgsTy &KernelArgs;
+  KernelLaunchParamsTy &LaunchParams;
+  bool IsGenericMode;
+  uint32_t KLEOffset; // KernelLaunchEnvironment offset in LaunchParams.Ptrs
+};
+
+/// Get OpenMP map type flags for argument (with safe bounds checking)
+static std::pair<int64_t, bool> getArgMapType(uint32_t ArgIdx,
+                                               const ArgConversionContext &Ctx) {
+  int64_t MapType = 0;
+  bool HasMapType = false;
+
+  if (Ctx.KernelArgs.ArgTypes && ArgIdx < Ctx.KernelArgs.NumArgs) {
+    MapType = Ctx.KernelArgs.ArgTypes[ArgIdx];
+    HasMapType = true;
+  }
+
+  return {MapType, HasMapType};
+}
+
+/// Get scalar type size in bytes
+static size_t getScalarSize(tbird_arg_type_t Type) {
+  switch (Type) {
+    case TBIRD_TYPE_INT8:
+    case TBIRD_TYPE_UINT8:
+      return 1;
+    case TBIRD_TYPE_INT16:
+    case TBIRD_TYPE_UINT16:
+      return 2;
+    case TBIRD_TYPE_INT32:
+    case TBIRD_TYPE_UINT32:
+    case TBIRD_TYPE_FLOAT:
+      return 4;
+    case TBIRD_TYPE_INT64:
+    case TBIRD_TYPE_UINT64:
+    case TBIRD_TYPE_DOUBLE:
+      return 8;
+    default:
+      return 8;
+  }
+}
+
+/// Convert pointer argument from OpenMP to tbird format
+static Error convertPointerArgument(uint32_t OmpIdx, tbird_arg_t &OutArg,
+                                     const ArgConversionContext &Ctx) {
+  if (!Ctx.LaunchParams.Ptrs) {
+    return Plugin::error(ErrorCode::UNKNOWN, "LaunchParams.Ptrs is NULL");
+  }
+
+  // LaunchParams.Ptrs is offset by KLEOffset (KernelLaunchEnvironment at [0])
+  uint32_t PtrIndex = OmpIdx + Ctx.KLEOffset;
+  uint32_t NumPtrs = Ctx.LaunchParams.Size / sizeof(void*);
+  if (PtrIndex >= NumPtrs) {
+    return Plugin::error(ErrorCode::UNKNOWN,
+                        "Pointer index %u >= NumPtrs %u", PtrIndex, NumPtrs);
+  }
+
+  void *DevicePtr = *(void**)Ctx.LaunchParams.Ptrs[PtrIndex];
+
+  // Verify it's in buffer registry
+  if (Ctx.Device->address_to_buffer.find(DevicePtr) ==
+      Ctx.Device->address_to_buffer.end()) {
+    return Plugin::error(ErrorCode::UNKNOWN,
+                        "Device pointer %p not in buffer registry", DevicePtr);
+  }
+
+  OutArg.value.ptr = DevicePtr;
+  DP("    PTR: %p (from *LaunchParams.Ptrs[%u])\n", DevicePtr, PtrIndex);
+  return Plugin::success();
+}
+
+/// Convert scalar argument from OpenMP to tbird format
+/// Handles by-value (literal), by-reference, and promotion to PTR
+static Error convertScalarArgument(uint32_t OmpIdx, tbird_arg_t &OutArg,
+                                    int64_t MapType, bool HasMapType,
+                                    const ArgConversionContext &Ctx) {
+  bool IsLiteral = (MapType & 0x100); // OMP_TGT_MAPTYPE_LITERAL
+  size_t ScalarSize = getScalarSize(OutArg.type);
+
+  // Check if scalar has device memory mapping (by-reference via Ptrs array)
+  if (Ctx.LaunchParams.Ptrs && !IsLiteral) {
+    uint32_t PtrIndex = OmpIdx + Ctx.KLEOffset;
+    if (PtrIndex < Ctx.LaunchParams.Size / sizeof(void*)) {
+      void *PotentialDevicePtr = *(void**)Ctx.LaunchParams.Ptrs[PtrIndex];
+
+      DP("    Checking LaunchParams.Ptrs[%u]=%p, dereferenced=*Ptrs[%u]=%p\n",
+         PtrIndex, Ctx.LaunchParams.Ptrs[PtrIndex], PtrIndex, PotentialDevicePtr);
+
+      // Check if this is in buffer registry (mapped device pointer)
+      auto It = Ctx.Device->address_to_buffer.find(PotentialDevicePtr);
+      if (It != Ctx.Device->address_to_buffer.end()) {
+        // Scalar by-ref with device mapping - treat as PTR
+        OutArg.value.ptr = PotentialDevicePtr;
+        OutArg.type = TBIRD_TYPE_PTR;
+        DP("    Scalar by-ref found in Ptrs[%u] as device ptr: %p -> treating as PTR\n",
+           PtrIndex, PotentialDevicePtr);
+        return Plugin::success();
+      }
+    }
+  }
+
+  // Firstprivate/by-value scalar
+  if (IsLiteral) {
+    // ArgPtrs[i] IS the value itself (not a pointer)
+    DP("    Scalar by-value: ArgPtrs[%u]=%p (direct value)\n",
+       OmpIdx, Ctx.KernelArgs.ArgPtrs[OmpIdx]);
+
+    uintptr_t ValueAsInt = (uintptr_t)Ctx.KernelArgs.ArgPtrs[OmpIdx];
+
+    // Write value with correct size
+    switch (OutArg.type) {
+      case TBIRD_TYPE_INT8:
+      case TBIRD_TYPE_UINT8:
+        *(uint8_t*)OutArg.value.scalar_bytes = (uint8_t)ValueAsInt;
+        break;
+      case TBIRD_TYPE_INT16:
+      case TBIRD_TYPE_UINT16:
+        *(uint16_t*)OutArg.value.scalar_bytes = (uint16_t)ValueAsInt;
+        break;
+      case TBIRD_TYPE_INT32:
+      case TBIRD_TYPE_UINT32:
+        *(uint32_t*)OutArg.value.scalar_bytes = (uint32_t)ValueAsInt;
+        break;
+      case TBIRD_TYPE_INT64:
+      case TBIRD_TYPE_UINT64:
+        *(uint64_t*)OutArg.value.scalar_bytes = (uint64_t)ValueAsInt;
+        break;
+      case TBIRD_TYPE_FLOAT: {
+        uint32_t Bits = (uint32_t)ValueAsInt;
+        memcpy(OutArg.value.scalar_bytes, &Bits, sizeof(Bits));
+        break;
+      }
+      case TBIRD_TYPE_DOUBLE:
+        memcpy(OutArg.value.scalar_bytes, &ValueAsInt, sizeof(ValueAsInt));
+        break;
+      default:
+        *(uint64_t*)OutArg.value.scalar_bytes = ValueAsInt;
+    }
+  } else {
+    // ArgPtrs[i] points to the data (by-reference on host)
+    DP("    Scalar by-ref: ArgPtrs[%u]=%p\n", OmpIdx, Ctx.KernelArgs.ArgPtrs[OmpIdx]);
+
+    // Check if this address is a mapped buffer
+    auto It = Ctx.Device->address_to_buffer.find(Ctx.KernelArgs.ArgPtrs[OmpIdx]);
+    if (It != Ctx.Device->address_to_buffer.end()) {
+      // Scalar by-ref is actually a pointer to mapped buffer
+      DP("    Found in buffer registry at address %p -> treating as PTR\n", It->first);
+      OutArg.type = TBIRD_TYPE_PTR;
+      OutArg.value.ptr = Ctx.KernelArgs.ArgPtrs[OmpIdx];
+    } else {
+      // True scalar by-reference - copy the value
+      DP("    Not in buffer registry -> copying %zu bytes as scalar value\n", ScalarSize);
+      memcpy(OutArg.value.scalar_bytes, Ctx.KernelArgs.ArgPtrs[OmpIdx], ScalarSize);
+    }
+  }
+
+  // Debug print
+  if (OutArg.type == TBIRD_TYPE_FLOAT) {
+    float Val;
+    memcpy(&Val, OutArg.value.scalar_bytes, sizeof(float));
+    DP("    FLOAT: %f\n", Val);
+  } else if (OutArg.type == TBIRD_TYPE_DOUBLE) {
+    double Val;
+    memcpy(&Val, OutArg.value.scalar_bytes, sizeof(double));
+    DP("    DOUBLE: %f\n", Val);
+  } else if (ScalarSize <= 4) {
+    uint32_t Val;
+    memcpy(&Val, OutArg.value.scalar_bytes, ScalarSize);
+    DP("    SCALAR%zu: 0x%x (%u)\n", ScalarSize, Val, Val);
+  } else {
+    uint64_t Val;
+    memcpy(&Val, OutArg.value.scalar_bytes, ScalarSize);
+    DP("    SCALAR%zu: 0x%lx (%lu)\n", ScalarSize, Val, Val);
+  }
+
+  return Plugin::success();
+}
+
+/// Convert all OpenMP kernel arguments to tbird_arg_t format
+/// Returns the number of converted arguments (excluding VOID types)
+///
+/// Note: KernelArgs.NumArgs may have been incremented by prepareArgs() to
+/// account for the KernelLaunchEnvironment (KLE) at LaunchParams.Ptrs[0].
+/// However, the metadata arrays (ArgCTypes, ArgTypes, ArgPtrs) are NOT
+/// extended - they still have the original argument count. We detect the
+/// KLE offset by comparing LaunchParams entry count vs KernelArgs.NumArgs.
+static Expected<uint32_t> convertKernelArguments(tbird_arg_t ArgsOut[TBIRD_MAX_ARGS],
+                                                  const ArgConversionContext &Ctx) {
+  // KernelArgs.NumArgs was incremented by KLEOffset in prepareArgs(), but
+  // the metadata arrays (ArgCTypes, ArgTypes, ArgPtrs) were NOT extended.
+  // Use KLEOffset from context to get the original argument count.
+  uint32_t OrigNumArgs = Ctx.KernelArgs.NumArgs - Ctx.KLEOffset;
+  DP("Converting %u arguments from OpenMP format to tbird_arg_t[] "
+     "(NumArgs=%u, KLEOffset=%u, OrigArgs=%u)\n",
+     OrigNumArgs, Ctx.KernelArgs.NumArgs, Ctx.KLEOffset, OrigNumArgs);
+
+  memset(ArgsOut, 0, sizeof(tbird_arg_t) * TBIRD_MAX_ARGS);
+  uint32_t ActualArgCount = 0;
+
+  // Iterate over the ORIGINAL argument count (metadata array bounds)
+  for (uint32_t i = 0; i < OrigNumArgs; i++) {
+    // Get type from ArgCTypes (indexed by original arg index)
+    uint8_t OmpCType = Ctx.KernelArgs.ArgCTypes ? Ctx.KernelArgs.ArgCTypes[i] : 11;
+    tbird_arg_type_t TbirdType = convert_omp_ctype_to_tbird(OmpCType);
+
+    // Skip VOID arguments (padding/internal use)
+    if (TbirdType == TBIRD_TYPE_VOID) {
+      DP("  arg[%u]: VOID type - skipping\n", i);
+      continue;
+    }
+
+    ArgsOut[ActualArgCount].type = TbirdType;
+
+    // Get map type flags (indexed by original arg index)
+    auto [MapType, HasMapType] = getArgMapType(i, Ctx);
+    bool IsLiteral = (MapType & 0x100);
+
+    // Debug output
+    DP("  arg[%u -> %u]: omp_ctype=%u -> tbird_type=%d\n",
+       i, ActualArgCount, OmpCType, (int)TbirdType);
+    DP("    arg_type=0x%lx: LITERAL=%d\n", MapType, IsLiteral);
+    DP("    ArgPtrs[%u]=%p\n", i, Ctx.KernelArgs.ArgPtrs[i]);
+
+    // Convert based on type
+    Error Err = (TbirdType == TBIRD_TYPE_PTR)
+      ? convertPointerArgument(i, ArgsOut[ActualArgCount], Ctx)
+      : convertScalarArgument(i, ArgsOut[ActualArgCount], MapType, HasMapType, Ctx);
+
+    if (Err)
+      return std::move(Err);
+
+    ActualArgCount++;
+  }
+
+  DP("Argument conversion complete. Actual args: %u (skipped %u VOID args)\n",
+     ActualArgCount, OrigNumArgs - ActualArgCount);
+
+  return ActualArgCount;
+}
+
+/// Prepend thread_id as first argument for GENERIC mode
+static void prependThreadId(tbird_arg_t Args[TBIRD_MAX_ARGS], uint32_t &ArgCount) {
+  DP("GENERIC mode: Prepending thread_id=0 as first argument\n");
+
+  // Shift all arguments forward by one
+  for (uint32_t i = ArgCount; i > 0; i--) {
+    Args[i] = Args[i-1];
+  }
+
+  // Insert thread_id=0 at position 0
+  Args[0].type = TBIRD_TYPE_INT64;
+  memset(Args[0].value.scalar_bytes, 0, sizeof(Args[0].value.scalar_bytes));
+  ArgCount++;
+
+  DP("After prepending thread_id: actual_arg_count=%u\n", ArgCount);
+}
+
+//===----------------------------------------------------------------------===//
+// launchImpl - Main kernel launch method
+//===----------------------------------------------------------------------===//
+
 Error ThunderbirdKernelTy::launchImpl(GenericDeviceTy &GenericDevice, uint32_t NumThreads[3],
                  uint32_t NumBlocks[3], KernelArgsTy &KernelArgs,
                  KernelLaunchParamsTy LaunchParams,
                  AsyncInfoWrapperTy &AsyncInfoWrapper) const {
-  fprintf(stderr, "[THUNDERBIRD RTL] launchImpl START: kernel=%s, NumArgs=%u\n", getName(), KernelArgs.NumArgs);
+  fprintf(stderr, "[THUNDERBIRD RTL] launchImpl START: kernel=%s, NumArgs=%u\n",
+          getName(), KernelArgs.NumArgs);
   fflush(stderr);
+
   DP("=== Phase 4: launchImpl START ===\n");
   DP("Kernel: %s\n", getName());
   DP("NumBlocks: [%u, %u, %u]\n", NumBlocks[0], NumBlocks[1], NumBlocks[2]);
   DP("NumThreads: [%u, %u, %u]\n", NumThreads[0], NumThreads[1], NumThreads[2]);
   DP("NumArgs: %u\n", KernelArgs.NumArgs);
-  
-  // Check for execution mode hints
-  bool is_spmd = (NumThreads[0] > 1 || NumThreads[1] > 1 || NumThreads[2] > 1);
-  bool is_generic = (NumThreads[0] == 1 && NumThreads[1] == 1 && NumThreads[2] == 1);
-  DP("Execution mode: %s (threads=%u)\n", 
-     is_spmd ? "SPMD" : (is_generic ? "GENERIC" : "UNKNOWN"),
-     NumThreads[0] * NumThreads[1] * NumThreads[2]);
-  
-  // In GENERIC mode, kernels typically expect a thread_id parameter
-  // In SPMD mode, they use actual thread indices
-  if (is_generic) {
-    DP("GENERIC mode detected - kernel MAY expect thread_id as first parameter\n");
-  }
-  
-  DP("LaunchParams.Size: %zu\n", LaunchParams.Size);
-  DP("LaunchParams.Data: %p\n", LaunchParams.Data);
-  DP("LaunchParams.Ptrs: %p\n", LaunchParams.Ptrs);
-  DP("KernelArgs.ArgPtrs: %p\n", (void*)KernelArgs.ArgPtrs);
-  DP("KernelArgs.ArgCTypes: %p\n", (void*)KernelArgs.ArgCTypes);
-  fflush(stdout);
-  
-  // Cast to Thunderbird device to access ctx
-  auto *TBirdDevice = static_cast<ThunderbirdDeviceTy *>(&GenericDevice);
-  
-  DP("Using ctx=%p, image_buffer=%p\n", (void*)TBirdDevice->ctx, (void*)image_buffer);
-  
-  // Debug: Print entire LaunchParams.Ptrs array
-  if (LaunchParams.Ptrs) {
-    size_t num_ptrs = LaunchParams.Size / sizeof(void*);
-    DP("LaunchParams.Ptrs array (%zu entries):\n", num_ptrs);
-    for (size_t i = 0; i < num_ptrs; i++) {
-      void *entry = LaunchParams.Ptrs[i];
-      void *dereferenced = entry ? *(void**)entry : nullptr;
-      DP("  Ptrs[%zu]=%p -> *Ptrs[%zu]=%p\n", i, entry, i, dereferenced);
-    }
-    fflush(stdout);
-  }
-  
-  // Debug: Print buffer registry
-  DP("Buffer registry (%zu entries):\n", TBirdDevice->address_to_buffer.size());
-  for (const auto &entry : TBirdDevice->address_to_buffer) {
-    DP("  address=%p -> buffer=%p\n", entry.first, (void*)entry.second);
-  }
-  fflush(stdout);
-  
-  // Check if we have arguments to process
-  if (KernelArgs.NumArgs == 0) {
-    DP("WARNING: No kernel arguments\n");
-  }
-  
+
+  // Validate argument count
   if (KernelArgs.NumArgs > TBIRD_MAX_ARGS) {
-    DP("ERROR: Too many arguments: %u > %d\n", KernelArgs.NumArgs, TBIRD_MAX_ARGS);
-    return Plugin::error(ErrorCode::UNKNOWN, 
-                        "Too many kernel arguments: %u (max %d)", 
+    return Plugin::error(ErrorCode::UNKNOWN,
+                        "Too many kernel arguments: %u (max %d)",
                         KernelArgs.NumArgs, TBIRD_MAX_ARGS);
   }
-  
-  // Build typed argument array for new API
-  DP("Converting %u arguments from OpenMP format to tbird_arg_t[]\n", KernelArgs.NumArgs);
-  fflush(stdout);
-  
-  tbird_arg_t args[TBIRD_MAX_ARGS];
-  memset(args, 0, sizeof(args));
-  
-  // Track actual number of arguments (excluding VOID)
-  uint32_t actual_arg_count = 0;
-  
-  // Process each argument
-  for (uint32_t i = 0; i < KernelArgs.NumArgs; i++) {
-    // Get type from ArgCTypes array
-    uint8_t omp_ctype = KernelArgs.ArgCTypes ? KernelArgs.ArgCTypes[i] : 11; // default to PTR
-    tbird_arg_type_t arg_type_converted = convert_omp_ctype_to_tbird(omp_ctype);
-    
-    // Skip VOID arguments (padding/internal use)
-    if (arg_type_converted == TBIRD_TYPE_VOID) {
-      DP("  arg[%u]: VOID type - skipping\n", i);
-      DP("    Position: %u of %u total args\n", i, KernelArgs.NumArgs);
-      DP("    ArgPtrs[%u]=%p\n", i, KernelArgs.ArgPtrs[i]);
-      
-      // Check if this VOID might be a placeholder for a thread ID parameter
-      if (i == KernelArgs.NumArgs - 1) {
-        DP("    VOID is LAST argument - likely just padding\n");
-      } else if (i == 0) {
-        DP("    VOID is FIRST argument - could be thread ID placeholder!\n");
-      } else {
-        DP("    VOID is in MIDDLE at position %u\n", i);
-      }
-      fflush(stdout);
-      continue;
+
+  // Cast to Thunderbird device
+  auto *TBirdDevice = static_cast<ThunderbirdDeviceTy *>(&GenericDevice);
+  DP("Using ctx=%p, image_buffer=%p\n", (void*)TBirdDevice->ctx, (void*)image_buffer);
+
+  // Detect execution mode
+  bool IsGeneric = (NumThreads[0] == 1 && NumThreads[1] == 1 && NumThreads[2] == 1);
+  DP("Execution mode: %s (threads=%u)\n",
+     IsGeneric ? "GENERIC" : "SPMD",
+     NumThreads[0] * NumThreads[1] * NumThreads[2]);
+
+  // Debug: Print LaunchParams.Ptrs array
+  if (LaunchParams.Ptrs) {
+    size_t NumPtrs = LaunchParams.Size / sizeof(void*);
+    DP("LaunchParams.Ptrs array (%zu entries):\n", NumPtrs);
+    for (size_t i = 0; i < NumPtrs; i++) {
+      void *Entry = LaunchParams.Ptrs[i];
+      void *Deref = Entry ? *(void**)Entry : nullptr;
+      DP("  Ptrs[%zu]=%p -> *Ptrs[%zu]=%p\n", i, Entry, i, Deref);
     }
-    
-    // Use the actual argument index (after skipping VOIDs)
-    args[actual_arg_count].type = arg_type_converted;
-    
-    // Get argument type flags to determine if by-value or by-reference
-    // Note: ArgTypes may be shorter than ArgCTypes (doesn't include hidden params)
-    int64_t arg_type = 0;
-    bool has_map_type = false;
-    
-    // Check if this argument has a corresponding OpenMP mapping entry
-    // Hidden/implicit args have ArgCTypes entry but no ArgTypes entry
-    if (KernelArgs.ArgTypes) {
-      // Heuristic: if ArgPtrs[i] looks like firstprivate value (< 0x10000)
-      // it likely has an ArgTypes entry. Otherwise we may be past array bounds.
-      uintptr_t ptr_val = (uintptr_t)KernelArgs.ArgPtrs[i];
-      if (ptr_val < 0x10000 || (ptr_val & 0xFFFFFFFF00000000) == 0) {
-        // Likely a by-value arg or has valid mapping
-        arg_type = KernelArgs.ArgTypes[i];
-        has_map_type = true;
-      }
-    }
-    
-    bool is_literal = (arg_type & 0x100);  // OMP_TGT_MAPTYPE_LITERAL (by-value)
-    
-    // Decode OpenMP map type flags for debugging
-    bool is_to = (arg_type & 0x1);      // OMP_TGT_MAPTYPE_TO
-    bool is_from = (arg_type & 0x2);    // OMP_TGT_MAPTYPE_FROM
-    bool is_alloc = (arg_type & 0x4);   // OMP_TGT_MAPTYPE_ALLOC
-    bool is_delete = (arg_type & 0x8);  // OMP_TGT_MAPTYPE_DELETE
-    bool is_implicit = (arg_type & 0x200); // OMP_TGT_MAPTYPE_IMPLICIT
-    
-    DP("  arg[%u -> %u]: omp_ctype=%u -> tbird_type=%d\n", 
-       i, actual_arg_count, omp_ctype, (int)args[actual_arg_count].type);
-    DP("    arg_type=0x%lx: TO=%d FROM=%d ALLOC=%d DELETE=%d LITERAL=%d IMPLICIT=%d\n",
-       arg_type, is_to, is_from, is_alloc, is_delete, is_literal, is_implicit);
-    DP("    ArgPtrs[%u]=%p (as_uintptr=0x%lx)\n", 
-       i, KernelArgs.ArgPtrs[i], (uintptr_t)KernelArgs.ArgPtrs[i]);
-    
-    // Check if ArgPtrs[i] looks like a pointer vs a scalar value
-    uintptr_t ptr_as_int = (uintptr_t)KernelArgs.ArgPtrs[i];
-    bool looks_like_address = (ptr_as_int > 0x10000) && 
-                              ((ptr_as_int & 0xFFFF000000000000ULL) != 0 || 
-                               (ptr_as_int & 0x00007FFFFFFFF000ULL) != 0);
-    DP("    looks_like_address=%d (based on value pattern)\n", looks_like_address);
-    fflush(stdout);
-    
-    if (args[actual_arg_count].type == TBIRD_TYPE_PTR) {
-      // Pointer argument - OpenMP uses Ptrs[i+1] for PTR arguments
-      if (!LaunchParams.Ptrs) {
-        DP("ERROR: LaunchParams.Ptrs is NULL\n");
-        return Plugin::error(ErrorCode::UNKNOWN, "LaunchParams.Ptrs is NULL");
-      }
-      
-      // OpenMP stores device pointers at Ptrs[i+1] (confirmed by instrumentation)
-      uint32_t ptr_index = i + 1;
-      if (ptr_index >= KernelArgs.NumArgs) {
-        DP("ERROR: Ptr index %u >= NumArgs %u\n", ptr_index, KernelArgs.NumArgs);
-        return Plugin::error(ErrorCode::UNKNOWN, "Ptrs index out of bounds");
-      }
-      
-      void *device_ptr = *(void**)LaunchParams.Ptrs[ptr_index];
-      
-      // Verify it's in our buffer registry
-      if (TBirdDevice->address_to_buffer.find(device_ptr) == TBirdDevice->address_to_buffer.end()) {
-        DP("ERROR: Device pointer %p not in buffer registry\n", device_ptr);
-        return Plugin::error(ErrorCode::UNKNOWN, "Device pointer not in buffer registry");
-      }
-      
-      args[actual_arg_count].value.ptr = device_ptr;
-      DP("    PTR: %p (from *LaunchParams.Ptrs[%u])\n", device_ptr, ptr_index);
-      fflush(stdout);
-      
-    } else {
-      // Scalar argument
-      size_t scalar_size = 8; // Default
-      
-      // Determine actual size based on type
-      switch (args[actual_arg_count].type) {
-        case TBIRD_TYPE_INT8:
-        case TBIRD_TYPE_UINT8:
-          scalar_size = 1;
-          break;
-        case TBIRD_TYPE_INT16:
-        case TBIRD_TYPE_UINT16:
-          scalar_size = 2;
-          break;
-        case TBIRD_TYPE_INT32:
-        case TBIRD_TYPE_UINT32:
-        case TBIRD_TYPE_FLOAT:
-          scalar_size = 4;
-          break;
-        case TBIRD_TYPE_INT64:
-        case TBIRD_TYPE_UINT64:
-        case TBIRD_TYPE_DOUBLE:
-          scalar_size = 8;
-          break;
-        default:
-          scalar_size = 8;
-      }
-      
-      // Check if this scalar has device memory (by-reference)
-      // Use Ptrs[i+1] pattern like we do for PTR arguments
-      if (LaunchParams.Ptrs && !is_literal) {
-        uint32_t ptr_index = i + 1;
-        if (ptr_index < LaunchParams.Size / sizeof(void*)) {
-          void *potential_device_ptr = *(void**)LaunchParams.Ptrs[ptr_index];
-          
-          DP("    Checking LaunchParams.Ptrs[%u]=%p, dereferenced=*Ptrs[%u]=%p\n",
-             ptr_index, LaunchParams.Ptrs[ptr_index], ptr_index, potential_device_ptr);
-          fflush(stdout);
-          
-          // Check if this is in buffer registry (means it's a mapped device pointer)
-          auto it = TBirdDevice->address_to_buffer.find(potential_device_ptr);
-          if (it != TBirdDevice->address_to_buffer.end()) {
-            // This scalar by-ref has a device mapping - pass pointer to it
-            args[actual_arg_count].value.ptr = potential_device_ptr;
-            DP("    Scalar by-ref found in Ptrs[%u] as device ptr: %p -> treating as PTR\n", 
-               ptr_index, potential_device_ptr);
-            fflush(stdout);
-            // Change type to PTR for device API
-            args[actual_arg_count].type = TBIRD_TYPE_PTR;
-            actual_arg_count++;
-            continue;
-          }
-        }
-      }
-      
-      // Firstprivate/by-value scalar
-      if (is_literal) {
-        // ArgPtrs[i] IS the value itself (passed by value), not a pointer
-        // This only happens for non-pointer scalar types
-        DP("    Scalar by-value: ArgPtrs[%u]=%p (direct value)\n", i, KernelArgs.ArgPtrs[i]);
-        fflush(stdout);
-        
-        // Cast the pointer value to the appropriate integer type
-        uintptr_t value_as_int = (uintptr_t)KernelArgs.ArgPtrs[i];
-        
-        // Write the value with correct size based on type
-        switch (args[actual_arg_count].type) {
-          case TBIRD_TYPE_INT8:
-          case TBIRD_TYPE_UINT8:
-            *(uint8_t*)args[actual_arg_count].value.scalar_bytes = (uint8_t)value_as_int;
-            break;
-          case TBIRD_TYPE_INT16:
-          case TBIRD_TYPE_UINT16:
-            *(uint16_t*)args[actual_arg_count].value.scalar_bytes = (uint16_t)value_as_int;
-            break;
-          case TBIRD_TYPE_INT32:
-          case TBIRD_TYPE_UINT32:
-            *(uint32_t*)args[actual_arg_count].value.scalar_bytes = (uint32_t)value_as_int;
-            break;
-          case TBIRD_TYPE_INT64:
-          case TBIRD_TYPE_UINT64:
-            *(uint64_t*)args[actual_arg_count].value.scalar_bytes = (uint64_t)value_as_int;
-            break;
-          case TBIRD_TYPE_FLOAT: {
-            // For float, interpret the lower 32 bits as float representation
-            uint32_t bits = (uint32_t)value_as_int;
-            memcpy(args[actual_arg_count].value.scalar_bytes, &bits, sizeof(bits));
-            break;
-          }
-          case TBIRD_TYPE_DOUBLE: {
-            // For double, interpret the 64 bits as double representation
-            memcpy(args[actual_arg_count].value.scalar_bytes, &value_as_int, sizeof(value_as_int));
-            break;
-          }
-          default:
-            *(uint64_t*)args[actual_arg_count].value.scalar_bytes = value_as_int;
-        }
-      } else {
-        // ArgPtrs[i] points to the data (by-reference on host)
-        // Check if this address is actually a mapped buffer
-        DP("    Scalar by-ref: ArgPtrs[%u]=%p\n", i, KernelArgs.ArgPtrs[i]);
-        
-        // For FLOATs, show what the bits would be if interpreted as float
-        if (args[actual_arg_count].type == TBIRD_TYPE_FLOAT && KernelArgs.ArgPtrs[i]) {
-          float value_as_float;
-          memcpy(&value_as_float, KernelArgs.ArgPtrs[i], sizeof(float));
-          DP("    If dereferenced as float: %.6f\n", value_as_float);
-        }
-        fflush(stdout);
-        
-        // Try to identify this as a buffer pointer
-        auto it = TBirdDevice->address_to_buffer.find(KernelArgs.ArgPtrs[i]);
-        if (it != TBirdDevice->address_to_buffer.end()) {
-          // This scalar by-ref is actually a pointer to a mapped buffer!
-          DP("    Found in buffer registry at address %p -> treating as PTR\n", 
-             it->first);
-          fflush(stdout);
-          args[actual_arg_count].type = TBIRD_TYPE_PTR;
-          args[actual_arg_count].value.ptr = KernelArgs.ArgPtrs[i];
-        } else {
-          // True scalar by-reference - copy the value
-          DP("    Not in buffer registry -> copying %zu bytes as scalar value\n", scalar_size);
-          fflush(stdout);
-          memcpy(args[actual_arg_count].value.scalar_bytes, KernelArgs.ArgPtrs[i], scalar_size);
-        }
-      }
-      
-      // Debug print based on type
-      if (args[actual_arg_count].type == TBIRD_TYPE_FLOAT) {
-        float val;
-        memcpy(&val, args[actual_arg_count].value.scalar_bytes, sizeof(float));
-        DP("    FLOAT: %f\n", val);
-      } else if (args[actual_arg_count].type == TBIRD_TYPE_DOUBLE) {
-        double val;
-        memcpy(&val, args[actual_arg_count].value.scalar_bytes, sizeof(double));
-        DP("    DOUBLE: %f\n", val);
-      } else if (scalar_size <= 4) {
-        uint32_t val;
-        memcpy(&val, args[actual_arg_count].value.scalar_bytes, scalar_size);
-        DP("    SCALAR%zu: 0x%x (%u)\n", scalar_size, val, val);
-      } else {
-        uint64_t val;
-        memcpy(&val, args[actual_arg_count].value.scalar_bytes, scalar_size);
-        DP("    SCALAR%zu: 0x%lx (%lu)\n", scalar_size, val, val);
-      }
-      fflush(stdout);
-    }
-    
-    // Increment actual argument count
-    actual_arg_count++;
   }
-  
-  DP("Argument conversion complete. Actual args: %u (skipped %u VOID args)\n",
-     actual_arg_count, KernelArgs.NumArgs - actual_arg_count);
-  
-  // GENERIC mode kernels expect a thread_id as first parameter
-  // Reuse is_generic variable from earlier
-  if (is_generic && actual_arg_count > 0) {
-    DP("GENERIC mode: Prepending thread_id=0 as first argument\n");
-    fflush(stdout);
-    
-    // Shift all arguments forward by one position
-    for (uint32_t i = actual_arg_count; i > 0; i--) {
-      args[i] = args[i-1];
-    }
-    
-    // Insert thread_id=0 at position 0
-    args[0].type = TBIRD_TYPE_INT64;
-    memset(args[0].value.scalar_bytes, 0, sizeof(args[0].value.scalar_bytes));
-    actual_arg_count++;
-    
-    DP("After prepending thread_id: actual_arg_count=%u\n", actual_arg_count);
-    fflush(stdout);
+
+  // Debug: Print buffer registry
+  DP("Buffer registry (%zu entries):\n", TBirdDevice->address_to_buffer.size());
+  for (const auto &Entry : TBirdDevice->address_to_buffer) {
+    DP("  address=%p -> buffer=%p\n", Entry.first, (void*)Entry.second);
   }
-  
-  // Debug: Print final argument array being sent to device
+
+  // Detect KLE offset: prepareArgs() may have inserted a KernelLaunchEnvironment
+  // pointer at LaunchParams.Ptrs[0] and incremented KernelArgs.NumArgs, but the
+  // metadata arrays (ArgCTypes, ArgTypes, ArgPtrs) were not extended.
+  uint32_t KLEOffset = 0;
+  if (LaunchParams.Ptrs) {
+    void *FirstVal = *(void**)LaunchParams.Ptrs[0];
+    if (FirstVal == reinterpret_cast<void*>(~0ULL)) {
+      KLEOffset = 1;
+      DP("Detected KernelLaunchEnvironment at Ptrs[0] (KLEOffset=1)\n");
+    }
+  }
+
+  // Convert OpenMP arguments to tbird format
+  tbird_arg_t Args[TBIRD_MAX_ARGS];
+  ArgConversionContext Ctx{TBirdDevice, KernelArgs, LaunchParams, IsGeneric, KLEOffset};
+
+  auto ArgCountOrErr = convertKernelArguments(Args, Ctx);
+  if (!ArgCountOrErr)
+    return ArgCountOrErr.takeError();
+
+  uint32_t ArgCount = *ArgCountOrErr;
+
+  // Insert thread_id for GENERIC mode
+  if (IsGeneric && ArgCount > 0) {
+    prependThreadId(Args, ArgCount);
+  }
+
+  // Debug: Print final argument array
   DP("Final converted argument array for device:\n");
-  for (uint32_t i = 0; i < actual_arg_count; i++) {
-    DP("  args[%u]: type=%d ", i, (int)args[i].type);
-    if (args[i].type == TBIRD_TYPE_PTR) {
-      DP("PTR=%p\n", args[i].value.ptr);
+  for (uint32_t i = 0; i < ArgCount; i++) {
+    DP("  args[%u]: type=%d ", i, (int)Args[i].type);
+    if (Args[i].type == TBIRD_TYPE_PTR) {
+      DP("PTR=%p\n", Args[i].value.ptr);
     } else {
       DP("SCALAR bytes:");
       for (size_t j = 0; j < 8; j++) {
-        DP(" %02x", args[i].value.scalar_bytes[j]);
+        DP(" %02x", Args[i].value.scalar_bytes[j]);
       }
       DP("\n");
     }
   }
-  fflush(stdout);
-  
-  // Get image sizefor launch API
-  size_t image_size = tbird_buffer_size(image_buffer);
-  DP("Image size: %zu bytes\n", image_size);
-  
-  // Launch kernel via new API
-  DP("Calling tbird_launch_kernel_sync:\n");
-  DP("  ctx=%p\n", (void*)TBirdDevice->ctx);
-  DP("  image_buffer=%p\n", (void*)image_buffer);
-  DP("  image_offset=0\n");
-  DP("  image_size=%zu\n", image_size);
-  DP("  entry_name=%s\n", getName());
-  DP("  args=%p\n", (void*)args);
-  DP("  num_args=%u (actual, after skipping VOID)\n", actual_arg_count);
-  
-  tbird_status_t status = tbird_launch_kernel_sync(
+
+  // Launch kernel
+  size_t ImageSize = tbird_buffer_size(image_buffer);
+  DP("Calling tbird_launch_kernel_sync: image_size=%zu, num_args=%u\n",
+     ImageSize, ArgCount);
+
+  tbird_status_t Status = tbird_launch_kernel_sync(
       TBirdDevice->ctx,
       image_buffer,
-      0,               // image_offset (always 0 for full image)
-      image_size,
-      getName(),       // kernel entry point symbol name
-      args,
-      actual_arg_count  // Use actual argument count, not KernelArgs.NumArgs
+      0,           // image_offset
+      ImageSize,
+      getName(),   // entry point symbol
+      Args,
+      ArgCount
   );
-  
-  if (status != TBIRD_SUCCESS) {
-    DP("ERROR: tbird_launch_kernel_sync failed: %s\n", 
-       tbird_last_error(TBirdDevice->ctx));
+
+  if (Status != TBIRD_SUCCESS) {
     return Plugin::error(ErrorCode::UNKNOWN,
-                        "tbird_launch_kernel_sync failed: %s", 
+                        "tbird_launch_kernel_sync failed: %s",
                         tbird_last_error(TBirdDevice->ctx));
   }
-  
+
   DP("SUCCESS: Kernel %s completed\n", getName());
   DP("=== Phase 4: launchImpl COMPLETE ===\n");
-  
+
   return Plugin::success();
 }
 
