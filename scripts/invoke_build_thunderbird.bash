@@ -27,7 +27,7 @@ echo "Using Linux sysroot: $SYSROOT"
 echo "Verifying: $(file "$SYSROOT/usr/include/pthread.h" 2>/dev/null || echo 'found')"
 
 ./scripts/build_thunderbird.sh \
-  --prefix /mnt/localstore/offload/llvm-project/myinstall \
+  --prefix /home/mbrothers/projects/llvm-project/myinstall \
   --src ./ \
   --jobs 24 \
   --sysroot "$SYSROOT" \

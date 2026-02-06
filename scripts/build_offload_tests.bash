@@ -1,6 +1,6 @@
 #!/bin/bash
 
-LLVM_INSTALL_DIR=/mnt/localstore/offload/llvm-project/myinstall
+LLVM_INSTALL_DIR=/home/mbrothers/projects/llvm-project/myinstall
 DEVICE_SYSROOT=/mnt/localstore/oecore-x86_64/sysroots/riscv64-inspire-linux
 
 echo "Building OpenMP offload tests for Thunderbird"
