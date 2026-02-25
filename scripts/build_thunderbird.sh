@@ -18,6 +18,10 @@ Options:
   --skip-host           Skip Phase 1 (LLVM/Clang/LLD)
   --skip-libomp         Skip Phase 2 (libomp)
   --skip-offload        Skip Phase 3 (offload)
+  --clean               Clean all phase build dirs before building (forces full rebuild)
+  --clean-host          Clean Phase 1 build dir only
+  --clean-omp           Clean Phase 2 build dir only
+  --clean-offload       Clean Phase 3 build dir only
   --lit PATH            Path to 'lit' if you want check-* targets enabled
   --cmake-arg ARG       Extra CMake arg for Phase 3 (repeatable)
   -h|--help             This help
@@ -34,6 +38,9 @@ OFFLOAD_PLATFORM_PATH=""
 SKIP_HOST=0
 SKIP_LIBOMP=0
 SKIP_OFFLOAD=0
+CLEAN_HOST=0
+CLEAN_OMP=0
+CLEAN_OFFLOAD=0
 LIT_PATH=""
 EXTRA_CMAKE=()
 
@@ -73,6 +80,24 @@ while [[ $# -gt 0 ]]; do
     ;;
   --skip-offload)
     SKIP_OFFLOAD=1
+    shift
+    ;;
+  --clean)
+    CLEAN_HOST=1
+    CLEAN_OMP=1
+    CLEAN_OFFLOAD=1
+    shift
+    ;;
+  --clean-host)
+    CLEAN_HOST=1
+    shift
+    ;;
+  --clean-omp)
+    CLEAN_OMP=1
+    shift
+    ;;
+  --clean-offload)
+    CLEAN_OFFLOAD=1
     shift
     ;;
   --lit)
@@ -168,7 +193,10 @@ mkdir -p "$BUILD_ROOT"
 # ============================================================
 if [[ "$SKIP_HOST" -eq 0 ]]; then
   echo "==> Phase 1: LLVM/Clang/LLD -> $PREFIX"
-  rm -rf "$PHASE1_BUILD"
+  if [[ "$CLEAN_HOST" -eq 1 ]]; then
+    echo "  (--clean-host: removing $PHASE1_BUILD)"
+    rm -rf "$PHASE1_BUILD"
+  fi
   declare -a CMAKE_PHASE1_ARGS=(
     -S "$SRC_ROOT/llvm" -B "$PHASE1_BUILD" -G Ninja
     -DCMAKE_BUILD_TYPE=RelWithDebInfo
@@ -200,7 +228,18 @@ fi
 
 if [[ "$SKIP_LIBOMP" -eq 0 ]]; then
   echo "==> Phase 2: libomp -> $PREFIX"
-  rm -rf "$PHASE2_BUILD"
+  if [[ "$CLEAN_OMP" -eq 1 ]]; then
+    echo "  (--clean-omp: removing $PHASE2_BUILD)"
+    rm -rf "$PHASE2_BUILD"
+  fi
+  # Invalidate cmake cache if the compiler was updated since last configure.
+  # CMake caches only the compiler path, not a hash — it won't detect in-place updates.
+  if [[ -f "$PHASE2_BUILD/CMakeCache.txt" && \
+        "$PREFIX/bin/clang" -nt "$PHASE2_BUILD/CMakeCache.txt" ]]; then
+    echo "  (clang updated since last configure — invalidating Phase 2 cmake cache)"
+    rm -f "$PHASE2_BUILD/CMakeCache.txt"
+    rm -rf "$PHASE2_BUILD/CMakeFiles/3."*
+  fi
   mkdir -p "$PHASE2_BUILD"
   cmake -S "$SRC_ROOT/openmp" -B "$PHASE2_BUILD" -G Ninja \
     -DCMAKE_BUILD_TYPE=RelWithDebInfo \
@@ -226,7 +265,17 @@ fi
 # ============================================================
 if [[ "$SKIP_OFFLOAD" -eq 0 ]]; then
   echo "==> Phase 3: offload (+ $PLUGINS) -> $PREFIX"
-  rm -rf "$PHASE3_BUILD"
+  if [[ "$CLEAN_OFFLOAD" -eq 1 ]]; then
+    echo "  (--clean-offload: removing $PHASE3_BUILD)"
+    rm -rf "$PHASE3_BUILD"
+  fi
+  # Invalidate cmake cache if the compiler was updated since last configure.
+  if [[ -f "$PHASE3_BUILD/CMakeCache.txt" && \
+        "$PREFIX/bin/clang" -nt "$PHASE3_BUILD/CMakeCache.txt" ]]; then
+    echo "  (clang updated since last configure — invalidating Phase 3 cmake cache)"
+    rm -f "$PHASE3_BUILD/CMakeCache.txt"
+    rm -rf "$PHASE3_BUILD/CMakeFiles/3."*
+  fi
   mkdir -p "$PHASE3_BUILD"
 
   CMAKE_ARGS=(
@@ -274,6 +323,20 @@ if [[ "$SKIP_OFFLOAD" -eq 0 ]]; then
   CMAKE_ARGS+=("${EXTRA_CMAKE[@]}")
 
   cmake -S "$SRC_ROOT/offload" -B "$PHASE3_BUILD" "${CMAKE_ARGS[@]}"
+
+  # libomp.so is an order-only dependency for the helper tools (llvm-offload-device-info,
+  # llvm-omp-kernel-replay) in Phase 3's build.ninja — Ninja only checks that it exists,
+  # not that it is fresh, for those targets. libomptarget.so.21.0git itself uses a normal
+  # dependency and Ninja does detect libomp.so changes for it. The cmake reconfigure also
+  # picks up libomp.so changes and regenerates build.ninja, triggering a full rebuild.
+  # This explicit clean is belt-and-suspenders: ensures relink even if cmake detection
+  # is somehow bypassed (e.g. if cmake is skipped in future refactors).
+  LIBOMPTARGET_INSTALLED="$PREFIX/lib/libomptarget.so.21.0git"
+  if [[ -f "$LIBOMPTARGET_INSTALLED" && -f "$LIBOMP_SO" ]] && \
+     [[ "$LIBOMP_SO" -nt "$LIBOMPTARGET_INSTALLED" ]]; then
+    echo "  (libomp.so updated — cleaning Phase 3 to force relink)"
+    ninja -C "$PHASE3_BUILD" clean
+  fi
 
   # Build the shared runtime + helper tools
   ninja -C "$PHASE3_BUILD" -j"$JOBS" omptarget llvm-offload-device-info llvm-omp-kernel-replay
