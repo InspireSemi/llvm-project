@@ -24,6 +24,7 @@ Options:
   --clean-offload       Clean Phase 3 build dir only
   --lit PATH            Path to 'lit' if you want check-* targets enabled
   --cmake-arg ARG       Extra CMake arg for Phase 3 (repeatable)
+  --host-cmake-arg ARG  Extra CMake arg for Phase 1 / host build (repeatable)
   -h|--help             This help
 EOF
 }
@@ -43,6 +44,7 @@ CLEAN_OMP=0
 CLEAN_OFFLOAD=0
 LIT_PATH=""
 EXTRA_CMAKE=()
+EXTRA_HOST_CMAKE=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -106,6 +108,10 @@ while [[ $# -gt 0 ]]; do
     ;;
   --cmake-arg)
     EXTRA_CMAKE+=("$2")
+    shift 2
+    ;;
+  --host-cmake-arg)
+    EXTRA_HOST_CMAKE+=("$2")
     shift 2
     ;;
   -h | --help)
@@ -206,6 +212,7 @@ if [[ "$SKIP_HOST" -eq 0 ]]; then
     -DCMAKE_INSTALL_PREFIX="$PREFIX"
     -DLLVM_PARALLEL_LINK_JOBS=4
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+    "${EXTRA_HOST_CMAKE[@]}"
 
   )
   cmake "${CMAKE_PHASE1_ARGS[@]}"
