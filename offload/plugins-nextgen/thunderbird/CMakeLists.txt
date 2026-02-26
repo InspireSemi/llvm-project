@@ -11,14 +11,19 @@ if(OFFLOAD_PLATFORM_PATH)
     ${OFFLOAD_PLATFORM_PATH}/simplified-api/include
     ${OFFLOAD_PLATFORM_PATH}/include
   )
-  # Link against libtbird_host.so
-  if(EXISTS "${OFFLOAD_PLATFORM_PATH}/simplified-api/host/libtbird_host.so")
+  # LIBTBIRD_HOST_SO can be set externally (e.g. by a Yocto recipe) to override
+  # the default path so the caller can supply a pre-built .so from a staging
+  # sysroot instead of a path relative to OFFLOAD_PLATFORM_PATH.
+  if(NOT LIBTBIRD_HOST_SO)
+    set(LIBTBIRD_HOST_SO "${OFFLOAD_PLATFORM_PATH}/simplified-api/host/libtbird_host.so")
+  endif()
+  if(EXISTS "${LIBTBIRD_HOST_SO}")
     target_link_libraries(omptarget.rtl.thunderbird PRIVATE
-      ${OFFLOAD_PLATFORM_PATH}/simplified-api/host/libtbird_host.so
+      "${LIBTBIRD_HOST_SO}"
     )
-    message(STATUS "Linked against libtbird_host.so")
+    message(STATUS "Linked against libtbird_host.so: ${LIBTBIRD_HOST_SO}")
   else()
-    message(FATAL_ERROR "libtbird_host.so not found at ${OFFLOAD_PLATFORM_PATH}/simplified-api/host/ - required for new API")
+    message(FATAL_ERROR "libtbird_host.so not found at ${LIBTBIRD_HOST_SO} - required for new API")
   endif()
 else()
   message(FATAL_ERROR "OFFLOAD_PLATFORM_PATH must be set for offload-platform API integration")

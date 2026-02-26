@@ -1,6 +1,15 @@
 #!/bin/bash
 # shellcheck enable=all
 # shellcheck disable=2250,2312
+#
+# DEPRECATED: This script is no longer used by the Yocto build.
+# The three-phase build is now driven directly by Yocto recipes in meta-inspire:
+#   Phase 1 (LLVM/Clang/LLD): llvm-thunderbird_git.bb
+#                              (inherit cmake cmake-native, BBCLASSEXTEND=native nativesdk)
+#   Phase 2 (libomp):          nativesdk-libomp-thunderbird_git.bb
+#   Phase 3 (libomptarget/DeviceRTL): nativesdk-llvm-thunderbird_git.bb
+# This script is retained for reference and manual/standalone builds outside Yocto.
+#
 
 set -euo pipefail
 IFS=$'\n\t'
