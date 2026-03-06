@@ -2047,6 +2047,27 @@ private:
     if (SCC.empty())
       return false;
 
+    // Skip Attributor-based optimizations for non-GPU device targets.
+    //
+    // Non-GPU targets like Thunderbird (RISC-V) DO use the OpenMP device
+    // runtime (__kmpc_target_init, __kmpc_parallel_51, etc.) but with a
+    // pthread-based execution model rather than GPU warps/SIMT. The OpenMPOpt
+    // Attributor analysis (AAKernelInfo, AAExecutionDomain, etc.) performs
+    // transformations that assume GPU execution semantics:
+    //   - SPMD-ization assumes warp-level synchronization
+    //   - State machine rewriting assumes GPU worker thread dispatch
+    //   - Execution domain analysis assumes GPU memory models
+    //
+    // These GPU-specific transformations incorrectly eliminate or transform
+    // code on non-GPU targets. Until the analysis is extended to handle
+    // CPU-based accelerators, skip the Attributor for these targets.
+    if (IsModulePass && isOpenMPDevice(M) &&
+        !OMPInfoCache.OMPBuilder.Config.IsGPU) {
+      LLVM_DEBUG(dbgs() << TAG
+                        << "Skipping Attributor for non-GPU device target\n");
+      return false;
+    }
+
     registerAAs(IsModulePass);
 
     ChangeStatus Changed = A.run();
