@@ -1423,6 +1423,18 @@ static void addArgumentAttrs(const SCCNodeSet &SCCNodes,
       return Attribute::None;
     };
 
+    // Do not infer read/write access attributes for device kernel entry points
+    // (functions with the "kernel" attribute). The alias chain from kernel
+    // pointer parameters through __kmpc_fork_call's varargs to the actual
+    // memory access is too complex for FunctionAttrs to track correctly,
+    // causing false readnone inference that eliminates the kernel body.
+    // Kernel entry parameters must be conservatively treated as read/written.
+    bool IsKernelSCC = llvm::any_of(ArgumentSCC, [](const ArgumentGraphNode *N) {
+      return N->Definition->getParent()->hasFnAttribute("kernel");
+    });
+    if (IsKernelSCC)
+      continue;
+
     Attribute::AttrKind AccessAttr = Attribute::ReadNone;
     for (ArgumentGraphNode *N : ArgumentSCC) {
       Argument *A = N->Definition;
