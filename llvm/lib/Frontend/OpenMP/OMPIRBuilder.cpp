@@ -9720,14 +9720,19 @@ void OpenMPIRBuilder::createOffloadEntry(Constant *ID, Constant *Addr,
                                          StringRef Name) {
   if (!Config.isGPU()) {
     // Mark the function as a kernel entry point so that OpenMPOpt's
-    // getDeviceKernels() includes it in the Kernels set.  Without this,
-    // OpenMPOpt internalizes the function (it has uses from the offload entry
-    // struct but no callers), and GlobalDCE then strips the ConstantExpr
-    // reference and removes the function entirely at -O1+.  GPU targets are
-    // protected by their kernel calling conventions; non-GPU targets (e.g.
-    // RISC-V / Thunderbird) need the "kernel" attribute instead.
-    if (Function *Fn = dyn_cast<Function>(Addr))
+    // getDeviceKernels() includes it in the Kernels set.  GPU targets are
+    // protected by their kernel calling conventions (amdgpu_kernel / spir_func)
+    // which IPSCCP treats as externally reachable.  Non-GPU targets (e.g.
+    // RISC-V / Thunderbird) have no special calling convention, so:
+    //   1. Add the "kernel" attribute for OpenMPOpt identification.
+    //   2. Set ExternalLinkage so IPSCCPPass treats the function as potentially
+    //      called from outside the module.  Without this, IPSCCP sees no direct
+    //      call sites (the function is only referenced by address in the offload
+    //      entry struct) and marks the entry block unreachable, wiping the body.
+    if (Function *Fn = dyn_cast<Function>(Addr)) {
       Fn->addFnAttr("kernel");
+      Fn->setLinkage(GlobalValue::ExternalLinkage);
+    }
     llvm::offloading::emitOffloadingEntry(
         M, object::OffloadKind::OFK_OpenMP, ID,
         Name.empty() ? Addr->getName() : Name, Size, Flags, /*Data=*/0);
