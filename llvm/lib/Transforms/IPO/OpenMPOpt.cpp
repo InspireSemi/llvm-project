@@ -1441,6 +1441,15 @@ private:
   bool deleteParallelRegions() {
     const unsigned CallbackCalleeOperand = 2;
 
+    // On non-GPU device targets (e.g. Thunderbird/RISC-V), __kmpc_fork_call
+    // drives the actual parallel execution via pthreads.  Deleting it would
+    // silently drop all parallel work.  The readnone/WillReturn inference that
+    // triggers deletion may also be incorrect on non-GPU targets because
+    // FunctionAttrs cannot always track writes through the captured-variable
+    // struct passed via varargs.
+    if (isOpenMPDevice(M) && !OMPInfoCache.OMPBuilder.Config.IsGPU)
+      return false;
+
     OMPInformationCache::RuntimeFunctionInfo &RFI =
         OMPInfoCache.RFIs[OMPRTL___kmpc_fork_call];
 
@@ -2052,17 +2061,18 @@ private:
     // Non-GPU targets like Thunderbird (RISC-V) DO use the OpenMP device
     // runtime (__kmpc_target_init, __kmpc_parallel_51, etc.) but with a
     // pthread-based execution model rather than GPU warps/SIMT. The OpenMPOpt
-    // Attributor analysis (AAKernelInfo, AAExecutionDomain, etc.) performs
-    // transformations that assume GPU execution semantics:
+    // Attributor analysis (AAKernelInfo, AAExecutionDomain, AAIsDead, etc.)
+    // performs transformations that assume GPU execution semantics:
     //   - SPMD-ization assumes warp-level synchronization
     //   - State machine rewriting assumes GPU worker thread dispatch
     //   - Execution domain analysis assumes GPU memory models
+    //   - AAIsDead marks blocks as dead based on GPU thread divergence
     //
     // These GPU-specific transformations incorrectly eliminate or transform
-    // code on non-GPU targets. Until the analysis is extended to handle
-    // CPU-based accelerators, skip the Attributor for these targets.
-    if (IsModulePass && isOpenMPDevice(M) &&
-        !OMPInfoCache.OMPBuilder.Config.IsGPU) {
+    // code on non-GPU targets. The guard must apply to BOTH module-level and
+    // CGSCC-level Attributor invocations; the CGSCC pass (IsModulePass=false)
+    // also registers and runs GPU-specific AAs via registerAAsForFunction().
+    if (isOpenMPDevice(M) && !OMPInfoCache.OMPBuilder.Config.IsGPU) {
       LLVM_DEBUG(dbgs() << TAG
                         << "Skipping Attributor for non-GPU device target\n");
       return false;
