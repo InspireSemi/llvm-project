@@ -1447,7 +1447,7 @@ private:
     // triggers deletion may also be incorrect on non-GPU targets because
     // FunctionAttrs cannot always track writes through the captured-variable
     // struct passed via varargs.
-    if (isOpenMPDevice(M) && !OMPInfoCache.OMPBuilder.Config.IsGPU)
+    if (isOpenMPDevice(M) && !OMPInfoCache.OMPBuilder.Config.isGPU())
       return false;
 
     OMPInformationCache::RuntimeFunctionInfo &RFI =
@@ -2072,7 +2072,7 @@ private:
     // code on non-GPU targets. The guard must apply to BOTH module-level and
     // CGSCC-level Attributor invocations; the CGSCC pass (IsModulePass=false)
     // also registers and runs GPU-specific AAs via registerAAsForFunction().
-    if (isOpenMPDevice(M) && !OMPInfoCache.OMPBuilder.Config.IsGPU) {
+    if (isOpenMPDevice(M) && !OMPInfoCache.OMPBuilder.Config.isGPU()) {
       LLVM_DEBUG(dbgs() << TAG
                         << "Skipping Attributor for non-GPU device target\n");
       return false;
