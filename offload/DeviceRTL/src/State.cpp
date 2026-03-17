@@ -223,10 +223,21 @@ void state::TeamStateTy::assertEqual(TeamStateTy &Other) const {
   ASSERT(HasThreadState == Other.HasThreadState, nullptr);
 }
 
+// On GPU targets, device memory is not zero-initialized by the loader, so
+// loader_uninitialized avoids costly zero-init. On Linux-based targets (e.g.
+// Thunderbird/RISC-V pthread), BSS IS zero-initialized by the OS. Using
+// loader_uninitialized on Linux causes GlobalOpt to propagate undef for reads
+// before any write, which leaks into @llvm.assume calls and triggers UB that
+// folds device kernels to unreachable at -O2+.
+#if defined(__nvptx__) || defined(__amdgcn__)
 [[clang::loader_uninitialized]] Local<state::TeamStateTy>
     ompx::state::TeamState;
 [[clang::loader_uninitialized]] Local<state::ThreadStateTy **>
     ompx::state::ThreadStates;
+#else
+Local<state::TeamStateTy> ompx::state::TeamState;
+Local<state::ThreadStateTy **> ompx::state::ThreadStates;
+#endif
 
 namespace {
 
