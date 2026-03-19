@@ -589,23 +589,22 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     DP("WARNING: Size=%ld is non-positive\n", Size);
   }
   
-  // Look up buffer handle
+  // Look up buffer handle (supports interior pointers)
   DP("Looking up TgtPtr in buffer registry (%zu entries)\n", address_to_buffer.size());
-  auto it = address_to_buffer.find(TgtPtr);
-  if (it == address_to_buffer.end()) {
+  auto [buffer, offset] = findContainingBuffer(TgtPtr);
+  if (!buffer) {
     DP("ERROR: pointer %p not in buffer registry\n", TgtPtr);
     return Plugin::error(ErrorCode::UNKNOWN,
                         "dataSubmit: pointer %p not in buffer registry", TgtPtr);
   }
-  
-  tbird_buffer_t buffer = it->second;
-  DP("Found buffer=%p for TgtPtr=%p\n", (void*)buffer, TgtPtr);
-  
+
+  DP("Found buffer=%p for TgtPtr=%p (offset=%zu)\n", (void*)buffer, TgtPtr, offset);
+
   // Transfer via driver ioctl
-  DP("Calling tbird_buffer_write(ctx=%p, buffer=%p, offset=0, src=%p, size=%ld)\n",
-     (void*)ctx, (void*)buffer, HstPtr, Size);
-  
-  tbird_status_t status = tbird_buffer_write(ctx, buffer, 0, HstPtr, Size);
+  DP("Calling tbird_buffer_write(ctx=%p, buffer=%p, offset=%zu, src=%p, size=%ld)\n",
+     (void*)ctx, (void*)buffer, offset, HstPtr, Size);
+
+  tbird_status_t status = tbird_buffer_write(ctx, buffer, offset, HstPtr, Size);
   if (status != TBIRD_SUCCESS) {
     DP("ERROR: tbird_buffer_write failed: %s\n", tbird_last_error(ctx));
     return Plugin::error(ErrorCode::UNKNOWN,
@@ -638,23 +637,22 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
       DP("WARNING: Size=%ld is non-positive\n", Size);
     }
     
-    // Look up buffer handle
+    // Look up buffer handle (supports interior pointers)
     DP("Looking up TgtPtr in buffer registry (%zu entries)\n", address_to_buffer.size());
-    auto it = address_to_buffer.find(const_cast<void*>(TgtPtr));
-    if (it == address_to_buffer.end()) {
+    auto [buffer, offset] = findContainingBuffer(const_cast<void*>(TgtPtr));
+    if (!buffer) {
       DP("ERROR: pointer %p not in buffer registry\n", TgtPtr);
       return Plugin::error(ErrorCode::UNKNOWN,
                           "dataRetrieve: pointer %p not in buffer registry", TgtPtr);
     }
-    
-    tbird_buffer_t buffer = it->second;
-    DP("Found buffer=%p for TgtPtr=%p\n", (void*)buffer, TgtPtr);
-    
+
+    DP("Found buffer=%p for TgtPtr=%p (offset=%zu)\n", (void*)buffer, TgtPtr, offset);
+
     // Transfer via driver ioctl
-    DP("Calling tbird_buffer_read(ctx=%p, buffer=%p, offset=0, dst=%p, size=%ld)\n",
-       (void*)ctx, (void*)buffer, HstPtr, Size);
-    
-    tbird_status_t status = tbird_buffer_read(ctx, buffer, 0, HstPtr, Size);
+    DP("Calling tbird_buffer_read(ctx=%p, buffer=%p, offset=%zu, dst=%p, size=%ld)\n",
+       (void*)ctx, (void*)buffer, offset, HstPtr, Size);
+
+    tbird_status_t status = tbird_buffer_read(ctx, buffer, offset, HstPtr, Size);
     if (status != TBIRD_SUCCESS) {
       DP("ERROR: tbird_buffer_read failed: %s\n", tbird_last_error(ctx));
       return Plugin::error(ErrorCode::UNKNOWN,
@@ -748,6 +746,26 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
 
   /// Buffer registry: maps host pointers to buffer handles
   std::unordered_map<void*, tbird_buffer_t> address_to_buffer;
+
+  /// Find the buffer containing ptr (supports interior pointers).
+  /// Returns {buffer, offset} or {nullptr, 0} if not found.
+  std::pair<tbird_buffer_t, size_t> findContainingBuffer(void *ptr) {
+    // Try exact match first (fast path)
+    auto it = address_to_buffer.find(ptr);
+    if (it != address_to_buffer.end())
+      return {it->second, 0};
+
+    // Range-based search for interior pointers
+    uintptr_t addr = (uintptr_t)ptr;
+    for (auto &[base, buffer] : address_to_buffer) {
+      uintptr_t base_addr = (uintptr_t)base;
+      size_t buf_size = tbird_buffer_size(buffer);
+      if (addr >= base_addr && addr < base_addr + buf_size) {
+        return {buffer, addr - base_addr};
+      }
+    }
+    return {nullptr, 0};
+  }
 
 private:
   /// Grid values for Thunderbird plugins.
@@ -878,9 +896,9 @@ static Error convertPointerArgument(uint32_t OmpIdx, tbird_arg_t &OutArg,
 
   void *DevicePtr = *(void**)Ctx.LaunchParams.Ptrs[PtrIndex];
 
-  // Verify it's in buffer registry
-  if (Ctx.Device->address_to_buffer.find(DevicePtr) ==
-      Ctx.Device->address_to_buffer.end()) {
+  // Verify it's in buffer registry (supports interior pointers)
+  auto [buf, ofs] = Ctx.Device->findContainingBuffer(DevicePtr);
+  if (!buf) {
     return Plugin::error(ErrorCode::UNKNOWN,
                         "Device pointer %p not in buffer registry", DevicePtr);
   }
@@ -907,9 +925,9 @@ static Error convertScalarArgument(uint32_t OmpIdx, tbird_arg_t &OutArg,
       DP("    Checking LaunchParams.Ptrs[%u]=%p, dereferenced=*Ptrs[%u]=%p\n",
          PtrIndex, Ctx.LaunchParams.Ptrs[PtrIndex], PtrIndex, PotentialDevicePtr);
 
-      // Check if this is in buffer registry (mapped device pointer)
-      auto It = Ctx.Device->address_to_buffer.find(PotentialDevicePtr);
-      if (It != Ctx.Device->address_to_buffer.end()) {
+      // Check if this is in buffer registry (supports interior pointers)
+      auto [foundBuf, foundOfs] = Ctx.Device->findContainingBuffer(PotentialDevicePtr);
+      if (foundBuf) {
         // Scalar by-ref with device mapping - treat as PTR
         OutArg.value.ptr = PotentialDevicePtr;
         OutArg.type = TBIRD_TYPE_PTR;
@@ -961,11 +979,11 @@ static Error convertScalarArgument(uint32_t OmpIdx, tbird_arg_t &OutArg,
     // ArgPtrs[i] points to the data (by-reference on host)
     DP("    Scalar by-ref: ArgPtrs[%u]=%p\n", OmpIdx, Ctx.KernelArgs.ArgPtrs[OmpIdx]);
 
-    // Check if this address is a mapped buffer
-    auto It = Ctx.Device->address_to_buffer.find(Ctx.KernelArgs.ArgPtrs[OmpIdx]);
-    if (It != Ctx.Device->address_to_buffer.end()) {
+    // Check if this address is a mapped buffer (supports interior pointers)
+    auto [scBuf, scOfs] = Ctx.Device->findContainingBuffer(Ctx.KernelArgs.ArgPtrs[OmpIdx]);
+    if (scBuf) {
       // Scalar by-ref is actually a pointer to mapped buffer
-      DP("    Found in buffer registry at address %p -> treating as PTR\n", It->first);
+      DP("    Found in buffer registry -> treating as PTR\n");
       OutArg.type = TBIRD_TYPE_PTR;
       OutArg.value.ptr = Ctx.KernelArgs.ArgPtrs[OmpIdx];
     } else {
