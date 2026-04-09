@@ -10,12 +10,14 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include <algorithm>
 #include <cassert>
 #include <cstddef>
 #include <ffi.h>
 #include <string>
 #include <variant>
 #include <unordered_map>
+#include <vector>
 
 #include "Shared/Debug.h"
 #include "Shared/Environment.h"
@@ -35,6 +37,7 @@
 
 // New offload-platform API
 #include "tbird_offload_api.h"
+#include "internal/tbird_types_internal.h"
 
 #if !defined(__BYTE_ORDER__) || !defined(__ORDER_LITTLE_ENDIAN__) ||           \
     !defined(__ORDER_BIG_ENDIAN__)
@@ -46,6 +49,143 @@
 #elif defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
 #define BIGENDIAN_CPU
 #endif
+
+// ---------------------------------------------------------------------------
+// Memory Pool — bump allocator over tbird_buffer_t slabs
+// ---------------------------------------------------------------------------
+// All device memory allocations (ELF images, data maps, scalars) go through
+// this pool. Sub-allocations within a slab reuse the slab's shared_key and
+// are addressed via offset for write/read/launch operations. The pool is
+// grow-only; slabs are freed in destroy() at device shutdown.
+// NOTE: not thread-safe — the Thunderbird RTL uses a single mailbox.
+
+struct MemoryPool {
+  static constexpr size_t INITIAL_SLAB_SIZE = 64 * 1024;  // 64 KB
+  static constexpr size_t ALIGNMENT = 16;
+  static constexpr size_t PAGE_SIZE = 4096;
+  static constexpr size_t MAX_POOL_PAGES = 900;  // BAR budget guard (~3.5 MiB)
+
+  struct Slab {
+    tbird_buffer_t buffer;
+    void *base;       // host VA from tbird_buffer_host_ptr()
+    size_t capacity;
+    size_t watermark;  // next free offset
+  };
+
+  struct SubAlloc {
+    size_t slab_idx;
+    size_t offset;
+    size_t size;
+  };
+
+  tbird_context_t ctx = nullptr;
+  std::vector<Slab> slabs;
+  size_t next_slab_size = INITIAL_SLAB_SIZE;
+  size_t total_pages = 0;
+  std::unordered_map<void *, SubAlloc> allocations;
+
+  void init(tbird_context_t context) {
+    ctx = context;
+    next_slab_size = INITIAL_SLAB_SIZE;
+    total_pages = 0;
+  }
+
+  /// Bump-allocate `size` bytes. Returns host VA usable as OpenMP "device ptr".
+  void *allocate(size_t size) {
+    size_t aligned = (size + ALIGNMENT - 1) & ~(ALIGNMENT - 1);
+
+    // Try current (last) slab
+    if (!slabs.empty()) {
+      Slab &cur = slabs.back();
+      if (cur.watermark + aligned <= cur.capacity) {
+        void *ptr = (char *)cur.base + cur.watermark;
+        allocations[ptr] = {slabs.size() - 1, cur.watermark, size};
+        cur.watermark += aligned;
+        DP("POOL: sub-alloc %zu bytes in slab %zu at offset %zu → %p\n",
+           size, slabs.size() - 1, cur.watermark - aligned, ptr);
+        return ptr;
+      }
+    }
+
+    // Need a new slab
+    size_t slab_size = std::max(next_slab_size, aligned);
+    slab_size = (slab_size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+    if (slab_size > TBIRD_MAX_BUFFER_SIZE)
+      slab_size = TBIRD_MAX_BUFFER_SIZE;
+    if (aligned > TBIRD_MAX_BUFFER_SIZE) {
+      DP("POOL ERROR: allocation %zu exceeds TBIRD_MAX_BUFFER_SIZE (%d)\n",
+         size, TBIRD_MAX_BUFFER_SIZE);
+      return nullptr;
+    }
+
+    // Page budget check (data pages + page-table pages)
+    size_t data_pages = slab_size / PAGE_SIZE;
+    size_t pt_pages = (data_pages + 510) / 511;
+    if (total_pages + data_pages + pt_pages > MAX_POOL_PAGES) {
+      DP("POOL ERROR: BAR budget exceeded (%zu + %zu + %zu > %zu)\n",
+         total_pages, data_pages, pt_pages, MAX_POOL_PAGES);
+      return nullptr;
+    }
+
+    DP("POOL: allocating new slab: %zu bytes (%zu pages)\n",
+       slab_size, data_pages);
+    tbird_buffer_t buf = tbird_alloc_buffer(ctx, slab_size);
+    if (!buf) {
+      DP("POOL ERROR: tbird_alloc_buffer(%zu) failed: %s\n",
+         slab_size, tbird_last_error(ctx));
+      return nullptr;
+    }
+
+    void *base = tbird_buffer_host_ptr(buf);
+    slabs.push_back({buf, base, slab_size, 0});
+    total_pages += data_pages + pt_pages;
+    next_slab_size = std::min(next_slab_size * 2, (size_t)TBIRD_MAX_BUFFER_SIZE);
+
+    // Allocate from fresh slab
+    Slab &fresh = slabs.back();
+    void *ptr = (char *)fresh.base + fresh.watermark;
+    allocations[ptr] = {slabs.size() - 1, fresh.watermark, size};
+    fresh.watermark += aligned;
+    DP("POOL: sub-alloc %zu bytes in new slab %zu at offset 0 → %p\n",
+       size, slabs.size() - 1, ptr);
+    return ptr;
+  }
+
+  /// Look up which slab and offset a pointer maps to (exact + interior).
+  std::pair<tbird_buffer_t, size_t> lookup(void *ptr) {
+    // Fast: exact match
+    auto it = allocations.find(ptr);
+    if (it != allocations.end()) {
+      auto &sub = it->second;
+      return {slabs[sub.slab_idx].buffer, sub.offset};
+    }
+    // Slow: interior pointer
+    uintptr_t addr = (uintptr_t)ptr;
+    for (auto &[base, sub] : allocations) {
+      uintptr_t base_addr = (uintptr_t)base;
+      if (addr >= base_addr && addr < base_addr + sub.size)
+        return {slabs[sub.slab_idx].buffer, sub.offset + (addr - base_addr)};
+    }
+    return {nullptr, 0};
+  }
+
+  /// Remove a sub-allocation from tracking (no DMA release — grow-only).
+  void deallocate(void *ptr) {
+    allocations.erase(ptr);
+  }
+
+  /// Free all slabs. Call from deinitImpl().
+  void destroy() {
+    if (!ctx) return;
+    for (auto &slab : slabs)
+      tbird_free_buffer(ctx, slab.buffer);
+    slabs.clear();
+    allocations.clear();
+    total_pages = 0;
+    next_slab_size = INITIAL_SLAB_SIZE;
+    DP("POOL: destroyed all slabs\n");
+  }
+};
 
 // The number of devices in this plugin.
 #define THUNDERBIRD_NUM_DEVICES 1
@@ -125,6 +265,8 @@ private:
   
   /// Image buffer handle containing this kernel's ELF image (Phase 4)
   tbird_buffer_t image_buffer = nullptr;
+  /// Offset of ELF image within pool slab
+  size_t kernel_elf_offset = 0;
 };
 
 /// Class implementing the Thunderbird device images properties.
@@ -160,6 +302,8 @@ struct ThunderbirdDeviceImageTy : public DeviceImageTy {
 
   /// Buffer handle for loaded image (Phase 3 migration)
   tbird_buffer_t image_buffer = nullptr;
+  /// Offset of ELF image within the pool slab (for elf_offset in kernel launch)
+  size_t elf_offset = 0;
 
 private:
   /// The dynamic library that loaded the image.
@@ -211,9 +355,12 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     
     DP("SUCCESS: Thunderbird context initialized: ctx=%p\n", (void*)ctx);
     DP("Setting MaxNumThreads=%d\n", THUNDERBIRD_MAX_THREADS);
-    
+
     MaxNumThreads = THUNDERBIRD_MAX_THREADS;
-    
+
+    pool.init(ctx);
+    DP("Memory pool initialized\n");
+
     DP("=== Phase 2/3: initImpl COMPLETE ===\n");
     fprintf(stderr, "[THUNDERBIRD RTL] Device initImpl COMPLETE\n");
     fflush(stderr);
@@ -236,16 +383,11 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     DP("Unloading image: Image=%p, image_buffer=%p\n",
        (void*)TBirdImage, (void*)TBirdImage->image_buffer);
 
-    // Free image buffer if allocated via new API
+    // Pool manages image buffer lifetime — no per-image free.
+    // The slab is released in pool.destroy() at device shutdown.
     if (TBirdImage->image_buffer) {
-      if (!ctx) {
-        DP("WARNING: ctx is NULL, cannot free image buffer\n");
-      } else {
-        DP("Freeing image buffer: tbird_free_buffer(ctx=%p, buffer=%p)\n",
-           (void*)ctx, (void*)TBirdImage->image_buffer);
-        tbird_free_buffer(ctx, TBirdImage->image_buffer);
-        DP("Image buffer freed\n");
-      }
+      DP("Image buffer %p managed by pool (offset %zu) — no free\n",
+         (void*)TBirdImage->image_buffer, TBirdImage->elf_offset);
       TBirdImage->image_buffer = nullptr;
     } else {
       DP("No image buffer to free\n");
@@ -259,8 +401,11 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     return Plugin::success();
   }
 
-  /// Deinitialize the device, which is a no-op
-  Error deinitImpl() override { return Plugin::success(); }
+  /// Deinitialize the device — release all pool slabs.
+  Error deinitImpl() override {
+    pool.destroy();
+    return Plugin::success();
+  }
 
   /// See GenericDeviceTy::getComputeUnitKind().
   std::string getComputeUnitKind() const override { return "thunderbird-64bit"; }
@@ -332,50 +477,43 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
       return Plugin::error(ErrorCode::INVALID_BINARY, "Invalid image size: %zu", ImageSize);
     }
     
-    // Allocate shared buffer for image
-    DP("Allocating image buffer: tbird_alloc_buffer(ctx=%p, size=%zu)\n",
-       (void*)ctx, ImageSize);
-    
-    tbird_buffer_t image_buf = tbird_alloc_buffer(ctx, ImageSize);
-    if (!image_buf) {
-      DP("ERROR: tbird_alloc_buffer failed for image: %s\n", tbird_last_error(ctx));
+    // Allocate image through pool
+    DP("POOL: allocating image buffer: %zu bytes\n", ImageSize);
+
+    void *img_ptr = pool.allocate(ImageSize);
+    if (!img_ptr) {
+      DP("ERROR: pool.allocate failed for image (%zu bytes)\n", ImageSize);
       Plugin.free(Image);
       return Plugin::error(ErrorCode::OUT_OF_RESOURCES,
-                          "tbird_alloc_buffer failed for image: %s", 
-                          tbird_last_error(ctx));
+                          "pool.allocate failed for image (%zu bytes)",
+                          ImageSize);
     }
-    
-    DP("SUCCESS: Allocated image buffer=%p\n", (void*)image_buf);
-    
-    // Upload image to shared buffer via ioctl
-    DP("Uploading image: tbird_buffer_write(buffer=%p, offset=0, src=%p, size=%zu)\n",
-       (void*)image_buf, TgtImage->ImageStart, ImageSize);
-    
-    tbird_status_t status = tbird_buffer_write(ctx, image_buf, 0, 
+
+    // Resolve slab buffer and offset for this sub-allocation
+    auto [image_buf, elf_off] = pool.lookup(img_ptr);
+    DP("POOL: image at slab buffer=%p, elf_offset=%zu\n",
+       (void*)image_buf, elf_off);
+
+    // Upload image to shared buffer at the pool-assigned offset
+    tbird_status_t status = tbird_buffer_write(ctx, image_buf, elf_off,
                                                TgtImage->ImageStart, ImageSize);
     if (status != TBIRD_SUCCESS) {
       DP("ERROR: tbird_buffer_write failed for image: %s\n", tbird_last_error(ctx));
-      tbird_free_buffer(ctx, image_buf);
       Plugin.free(Image);
       return Plugin::error(ErrorCode::UNKNOWN,
                           "tbird_buffer_write failed for image: %s",
                           tbird_last_error(ctx));
     }
+
+    void *host_ptr = img_ptr;
+    DP("SUCCESS: Image uploaded via pool: buffer=%p, elf_offset=%zu\n",
+       (void*)image_buf, elf_off);
     
-    void *host_ptr = tbird_buffer_host_ptr(image_buf);
-    DP("SUCCESS: Image uploaded: buffer=%p, host_ptr=%p\n", 
-       (void*)image_buf, host_ptr);
-    
-    if (!host_ptr) {
-      DP("ERROR: tbird_buffer_host_ptr returned NULL\n");
-      tbird_free_buffer(ctx, image_buf);
-      Plugin.free(Image);
-      return Plugin::error(ErrorCode::UNKNOWN, "tbird_buffer_host_ptr returned NULL");
-    }
-    
-    // Store buffer handle in image object
-    DP("Storing image_buffer=%p in Image object\n", (void*)image_buf);
+    // Store buffer handle and pool offset in image object
+    DP("Storing image_buffer=%p, elf_offset=%zu in Image object\n",
+       (void*)image_buf, elf_off);
     Image->image_buffer = image_buf;
+    Image->elf_offset = elf_off;
     
     // Set base address to host pointer (for symbol resolution)
     // This allows getGlobalMetadataFromDevice to calculate offsets
@@ -455,42 +593,20 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     case TARGET_ALLOC_SHARED:
     case TARGET_ALLOC_DEVICE_NON_BLOCKING:
       {
-        // Validate context
         if (!ctx) {
           DP("ERROR: ctx is NULL, cannot allocate buffer\n");
           return nullptr;
         }
-        
-        DP("Calling tbird_alloc_buffer(ctx=%p, size=%zu)\n", (void*)ctx, Size);
-        
-        // Call new API to allocate buffer
-        tbird_buffer_t buffer = tbird_alloc_buffer(ctx, Size);
-        if (!buffer) {
-          DP("ERROR: tbird_alloc_buffer returned NULL: %s\n", tbird_last_error(ctx));
+
+        void *ptr = pool.allocate(Size);
+        if (!ptr) {
+          DP("ERROR: pool.allocate(%zu) failed\n", Size);
           return nullptr;
         }
-        
-        DP("SUCCESS: tbird_alloc_buffer returned buffer=%p\n", (void*)buffer);
-        
-        // Get host pointer for the buffer
-        void *host_ptr = tbird_buffer_host_ptr(buffer);
-        if (!host_ptr) {
-          DP("ERROR: tbird_buffer_host_ptr returned NULL\n");
-          tbird_free_buffer(ctx, buffer);
-          return nullptr;
-        }
-        
-        DP("Got host_ptr=%p from buffer\n", host_ptr);
-        
-        // Register mapping for future free/transfer operations
-        address_to_buffer[host_ptr] = buffer;
-        DP("Registered in address_to_buffer map (now %zu entries)\n", 
-           address_to_buffer.size());
-        
-        DP("SUCCESS: Allocated buffer: size=%zu, host_ptr=%p, buffer=%p\n", 
-           Size, host_ptr, (void*)buffer);
-        
-        return host_ptr;
+
+        DP("SUCCESS: pool.allocate(%zu) → %p (now %zu tracked)\n",
+           Size, ptr, pool.allocations.size());
+        return ptr;
       }
     case TARGET_ALLOC_HOST:
       DP("HOST allocation (using malloc)\n");
@@ -500,52 +616,19 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     return MemAlloc;
   }
 
-  /// Free the memory. Use std::free in all cases.
-  // TODO: switch the free below for the target free
+  /// Free device memory — removes from pool tracking (grow-only, no DMA release).
   int free(void *TgtPtr, TargetAllocTy Kind) override {
-    DP("=== Phase 2: free(TgtPtr=%p, Kind=%d) ===\n", TgtPtr, (int)Kind);
-    
+    DP("=== free(TgtPtr=%p, Kind=%d) ===\n", TgtPtr, (int)Kind);
+
     switch (Kind) {
     case TARGET_ALLOC_DEFAULT:
     case TARGET_ALLOC_DEVICE:
     case TARGET_ALLOC_SHARED:
     case TARGET_ALLOC_DEVICE_NON_BLOCKING:
-      {
-        // Validate context
-        if (!ctx) {
-          DP("ERROR: ctx is NULL, cannot free buffer\n");
-          return OFFLOAD_FAIL;
-        }
-        
-        DP("Looking up pointer in address_to_buffer (%zu entries)\n",
-           address_to_buffer.size());
-        
-        // Look up buffer handle from pointer
-        auto it = address_to_buffer.find(TgtPtr);
-        if (it == address_to_buffer.end()) {
-          DP("ERROR: pointer %p not found in buffer registry\n", TgtPtr);
-          DP("Registry contents: ");
-          for (const auto &entry : address_to_buffer) {
-            DP("  %p -> %p\n", entry.first, (void*)entry.second);
-          }
-          return OFFLOAD_FAIL;
-        }
-        
-        tbird_buffer_t buffer = it->second;
-        DP("Found buffer=%p for host_ptr=%p\n", (void*)buffer, TgtPtr);
-        
-        // Free via new API (returns void)
-        DP("Calling tbird_free_buffer(ctx=%p, buffer=%p)\n", (void*)ctx, (void*)buffer);
-        tbird_free_buffer(ctx, buffer);
-        
-        // Remove from registry
-        address_to_buffer.erase(it);
-        DP("Removed from registry (now %zu entries)\n", address_to_buffer.size());
-        
-        DP("SUCCESS: Freed buffer: host_ptr=%p, buffer=%p\n", TgtPtr, (void*)buffer);
-        
-        return OFFLOAD_SUCCESS;
-      }
+      pool.deallocate(TgtPtr);
+      DP("SUCCESS: pool.deallocate(%p) (now %zu tracked)\n",
+         TgtPtr, pool.allocations.size());
+      return OFFLOAD_SUCCESS;
     case TARGET_ALLOC_HOST:
       std::free(TgtPtr);
       return OFFLOAD_SUCCESS;
@@ -590,7 +673,7 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
   }
   
   // Look up buffer handle (supports interior pointers)
-  DP("Looking up TgtPtr in buffer registry (%zu entries)\n", address_to_buffer.size());
+  DP("Looking up TgtPtr in pool (%zu tracked)\n", pool.allocations.size());
   auto [buffer, offset] = findContainingBuffer(TgtPtr);
   if (!buffer) {
     DP("ERROR: pointer %p not in buffer registry\n", TgtPtr);
@@ -638,7 +721,7 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     }
     
     // Look up buffer handle (supports interior pointers)
-    DP("Looking up TgtPtr in buffer registry (%zu entries)\n", address_to_buffer.size());
+    DP("Looking up TgtPtr in pool (%zu tracked)\n", pool.allocations.size());
     auto [buffer, offset] = findContainingBuffer(const_cast<void*>(TgtPtr));
     if (!buffer) {
       DP("ERROR: pointer %p not in buffer registry\n", TgtPtr);
@@ -723,7 +806,6 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
   }
 
   /// This plugin should not setup the device environment or memory pool.
-  // TODO: do we need to setup memory pools?
   virtual bool shouldSetupDeviceEnvironment() const override { return false; };
   virtual bool shouldSetupDeviceMemoryPool() const override { return false; };
 
@@ -744,27 +826,13 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
   /// New offload-platform API context (Phase 5: old channels removed)
   tbird_context_t ctx = nullptr;
 
-  /// Buffer registry: maps host pointers to buffer handles
-  std::unordered_map<void*, tbird_buffer_t> address_to_buffer;
+  /// Unified memory pool — all allocations (ELF + data) go through this.
+  MemoryPool pool;
 
   /// Find the buffer containing ptr (supports interior pointers).
-  /// Returns {buffer, offset} or {nullptr, 0} if not found.
+  /// Delegates to the memory pool for all allocations.
   std::pair<tbird_buffer_t, size_t> findContainingBuffer(void *ptr) {
-    // Try exact match first (fast path)
-    auto it = address_to_buffer.find(ptr);
-    if (it != address_to_buffer.end())
-      return {it->second, 0};
-
-    // Range-based search for interior pointers
-    uintptr_t addr = (uintptr_t)ptr;
-    for (auto &[base, buffer] : address_to_buffer) {
-      uintptr_t base_addr = (uintptr_t)base;
-      size_t buf_size = tbird_buffer_size(buffer);
-      if (addr >= base_addr && addr < base_addr + buf_size) {
-        return {buffer, addr - base_addr};
-      }
-    }
-    return {nullptr, 0};
+    return pool.lookup(ptr);
   }
 
 private:
@@ -792,14 +860,16 @@ Error ThunderbirdKernelTy::initImpl(GenericDeviceTy &Device, DeviceImageTy &Imag
   // Get image buffer from DeviceImageTy
   auto &TBirdImage = static_cast<ThunderbirdDeviceImageTy &>(Image);
   image_buffer = TBirdImage.image_buffer;
-  
+  kernel_elf_offset = TBirdImage.elf_offset;
+
   if (!image_buffer) {
     DP("ERROR: Image buffer is NULL for kernel %s\n", getName());
     return Plugin::error(ErrorCode::INVALID_BINARY,
                         "Image buffer not loaded for kernel %s", getName());
   }
-  
-  DP("Stored image_buffer=%p for kernel %s\n", (void*)image_buffer, getName());
+
+  DP("Stored image_buffer=%p, elf_offset=%zu for kernel %s\n",
+     (void*)image_buffer, kernel_elf_offset, getName());
  
   // Functions have zero size.
   GlobalTy Global(getName(), 0);
@@ -1140,11 +1210,9 @@ Error ThunderbirdKernelTy::launchImpl(GenericDeviceTy &GenericDevice, uint32_t N
     }
   }
 
-  // Debug: Print buffer registry
-  DP("Buffer registry (%zu entries):\n", TBirdDevice->address_to_buffer.size());
-  for (const auto &Entry : TBirdDevice->address_to_buffer) {
-    DP("  address=%p -> buffer=%p\n", Entry.first, (void*)Entry.second);
-  }
+  // Debug: Print pool state
+  DP("Pool: %zu tracked allocations, %zu slabs\n",
+     TBirdDevice->pool.allocations.size(), TBirdDevice->pool.slabs.size());
 
   // Detect KLE offset: prepareArgs() may have inserted a KernelLaunchEnvironment
   // pointer at LaunchParams.Ptrs[0] and incremented KernelArgs.NumArgs, but the
@@ -1188,15 +1256,17 @@ Error ThunderbirdKernelTy::launchImpl(GenericDeviceTy &GenericDevice, uint32_t N
     }
   }
 
-  // Launch kernel
+  // Launch kernel — elf_offset points to the ELF start within the pool slab.
+  // ImageSize is the full slab size; the device server parses ELF headers
+  // starting at elf_offset to determine actual image bounds.
   size_t ImageSize = tbird_buffer_size(image_buffer);
-  DP("Calling tbird_launch_kernel_sync: image_size=%zu, num_args=%u\n",
-     ImageSize, ArgCount);
+  DP("Calling tbird_launch_kernel_sync: elf_offset=%zu, image_size=%zu, num_args=%u\n",
+     kernel_elf_offset, ImageSize, ArgCount);
 
   tbird_status_t Status = tbird_launch_kernel_sync(
       TBirdDevice->ctx,
       image_buffer,
-      0,           // image_offset
+      kernel_elf_offset,
       ImageSize,
       getName(),   // entry point symbol
       Args,
