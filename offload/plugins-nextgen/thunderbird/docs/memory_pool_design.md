@@ -4,7 +4,11 @@ The Thunderbird OpenMP offload plugin (`libomptarget`) communicates with the RIS
 
 ## Motivation: Per-Allocation Overhead
 
-Before the pool, every `#pragma omp target map(...)` triggered a separate ioctl to the host kernel driver. For a SAXPY operation with three mapped buffers (x, y, scalar), this meant three round-trips through the ioctl interface, three page-table constructions, and three 4 KB page-aligned allocations — even for a 4-byte scalar.
+Before the pool, every ELF-image load and every `#pragma omp target map(...)`
+triggered a separate ioctl to the host kernel driver. For a SAXPY operation
+with one ELF plus three data buffers (x, y, scalar), that's four round-trips
+through the ioctl interface, four page-table constructions, and three
+4 KB-page-aligned data allocations — even for a 4-byte scalar.
 
 ```mermaid
 sequenceDiagram
@@ -15,6 +19,11 @@ sequenceDiagram
 
     Note over OMP,BAR: Before: Per-Allocation Model (SAXPY)
 
+    OMP->>RTL: loadBinary (ELF ~217 KB)
+    RTL->>DRV: ioctl ADD_SHARED (~217 KB)
+    DRV->>BAR: alloc 53 data pages + 1 PT page
+    DRV-->>RTL: shared_key
+
     OMP->>RTL: allocate(4000) — x array
     RTL->>DRV: ioctl ADD_SHARED (4096 aligned)
     DRV->>BAR: alloc 1 data page + 1 PT page
@@ -30,10 +39,11 @@ sequenceDiagram
     DRV->>BAR: alloc 1 data page + 1 PT page
     DRV-->>RTL: shared_key
 
-    Note over BAR: 3 ioctls · 6 pages consumed · 12 KB for 8,004 bytes of data
+    Note over BAR: 4 ioctls · 59 pages consumed · 12 KB wasted on 3 tiny data allocs
 ```
 
-The scalar allocation is particularly wasteful: 4 bytes of data consumes an entire 4 KB data page plus a 4 KB page-table page — a 2,048x overhead.
+The scalar allocation is particularly wasteful: 4 bytes of data consumes an
+entire 4 KB data page plus a 4 KB page-table page — a 2,048× overhead.
 
 ## Pool Architecture
 
@@ -43,37 +53,50 @@ The pool pre-allocates large slabs via a single ioctl and sub-allocates within t
 flowchart TD
     subgraph pool["Memory Pool (in ThunderbirdDeviceTy)"]
         direction TB
-        state["next_slab_size floor: 64K → 128K → 256K → ... → 1 MiB<br/>total_pages: running BAR budget<br/>allocations: ptr → {slab, offset, size}"]
+        state["Rule: new slab = max(64 KB floor, requested)<br/>total_pages ≤ MAX_POOL_PAGES (500)<br/>allocations: ptr → {slab, offset, size}"]
 
-        subgraph slab0["Slab 0 · ~220 KB<br/>(grown to fit first allocation)"]
-            elf["ELF Image<br/>~216 KB"]
+        subgraph slab0["Slab 0 · ~217 KB<br/>(sized to the ELF)"]
+            elf["ELF Image<br/>~217 KB"]
         end
 
-        subgraph slab1["Slab 1 · 128 KB<br/>(floor after first doubling)"]
-            buf_x["x array<br/>4000 B"]
-            buf_y["y array<br/>4000 B"]
-            buf_s["scalar<br/>4 B"]
-            free1["... free space ..."]
+        subgraph slab1["Slab 1 · 1 MiB<br/>(sized to matrix A)"]
+            matA["HPL matrix A<br/>(N=360 → ~1 MiB)"]
+            freeA["...small tail..."]
+        end
+
+        subgraph slab2["Slab 2 · 64 KB<br/>(64 KB floor, many small sub-allocs)"]
+            scalars["scalar args<br/>(4 B each, bump-packed)"]
+            workbuf["HPL WORK<br/>(~4 KB)"]
+            free2["... free space ..."]
         end
     end
 
     omp_alloc["OpenMP Runtime<br/>allocate(size)"] --> pool
-    pool -->|"bump pointer<br/>within slab"| slab1
-    pool -->|"ioctl only when<br/>new slab needed"| driver["Kernel Driver<br/>ioctl ADD_SHARED"]
+    pool -->|"bump pointer<br/>within slab"| slab2
+    pool -->|"ioctl only when<br/>current slab full"| driver["Kernel Driver<br/>ioctl ADD_SHARED"]
     driver --> bar["BAR Pages"]
 
     style elf fill:#4a9,color:#fff
-    style buf_x fill:#49a,color:#fff
-    style buf_y fill:#49a,color:#fff
-    style buf_s fill:#49a,color:#fff
-    style free1 fill:#ddd,color:#666
+    style matA fill:#49a,color:#fff
+    style scalars fill:#49a,color:#fff
+    style workbuf fill:#49a,color:#fff
+    style freeA fill:#ddd,color:#666
+    style free2 fill:#ddd,color:#666
 ```
 
-**Slab sizing.** A new slab is allocated at `max(next_slab_size, requested_size)`, page-aligned, capped at `TBIRD_MAX_BUFFER_SIZE`. `INITIAL_SLAB_SIZE = 64 KB` is the *floor* for the first slab — it is not a hard cap. An HPL run, for example, loads its ~216 KB device ELF through the pool before any data map, so Slab 0 grows to ~220 KB on the very first allocation. After that call, `next_slab_size` doubles to 128 KB, which becomes the floor for Slab 1. The doubling continues up to the 1 MiB per-buffer cap.
+**Slab sizing is stateless.** Every new slab is sized as
+`max(64 KB floor, requested)`, page-aligned, capped at
+`TBIRD_MAX_BUFFER_SIZE` (1 MiB). There is no `next_slab_size` state,
+no doubling, no growth curve — each slab is independently sized to the
+request that forced it. Big allocations (ELF ~217 KB, HPL matrix A ~1 MiB)
+define their own slab exactly; small allocations land in a 64 KB slab
+and amortize the ioctl across many bump-allocations.
 
 ## Allocation Flow
 
-When the OpenMP runtime requests a device buffer, the pool first tries to fit it in the current slab. If the slab is full, a new one is allocated from the driver with doubling growth (64 KB → 128 KB → ... → 1 MiB cap). A BAR page budget guard prevents overrunning the 4 MiB shared memory region.
+When the OpenMP runtime requests a device buffer, the pool tries the current
+slab first. If the slab is full, a new one is allocated at
+`max(64 KB, requested)` and sanity-checked against the per-mailbox budget.
 
 ```mermaid
 flowchart TD
@@ -83,13 +106,13 @@ flowchart TD
     check -->|yes| bump["Bump watermark<br/>return base + offset"]
     bump --> record["Record in allocations map<br/>{slab_idx, offset, size}"]
 
-    check -->|no| calc["Calculate slab size:<br/>max(next_slab_size, aligned)<br/>round up to page boundary<br/>cap at TBIRD_MAX_BUFFER_SIZE"]
+    check -->|no| calc["slab_size =<br/>max(INITIAL_SLAB_SIZE, aligned)<br/>round up to page boundary<br/>cap at TBIRD_MAX_BUFFER_SIZE"]
 
-    calc --> budget{"total_pages + new_pages<br/>≤ MAX_POOL_PAGES?"}
-    budget -->|no| fail["Return nullptr<br/>(BAR exhausted)"]
+    calc --> budget{"total_pages + new_pages<br/>≤ MAX_POOL_PAGES (500)?"}
+    budget -->|no| fail["Return nullptr<br/>(mailbox budget exhausted)"]
     budget -->|yes| ioctl["tbird_alloc_buffer(ctx, slab_size)<br/>— single kernel ioctl"]
 
-    ioctl --> push["Push new slab<br/>Update total_pages<br/>Double next_slab_size"]
+    ioctl --> push["Push new slab<br/>Update total_pages"]
     push --> bump
 
     style fail fill:#c44,color:#fff
@@ -97,9 +120,10 @@ flowchart TD
     style bump fill:#4a9,color:#fff
 ```
 
-## SAXPY With Pool: 3x Fewer Ioctls
+## SAXPY With Pool: 2 Ioctls vs 4
 
-The same SAXPY operation now uses a single slab allocation. The three data buffers are bump-allocated within the slab at different offsets, and all DMA transfers use the slab's `shared_key` with the appropriate offset.
+SAXPY touches one ELF image plus three data buffers. The Before/After
+counts include the ELF load as well as the three data maps.
 
 ```mermaid
 sequenceDiagram
@@ -110,62 +134,94 @@ sequenceDiagram
 
     Note over OMP,BAR: After: Pool Model (SAXPY)
 
+    OMP->>RTL: loadBinary (ELF ~217 KB)
+    RTL->>RTL: No slab yet; slab_size = max(64K, 217K) = 217K
+    RTL->>DRV: ioctl ADD_SHARED (~217 KB)
+    DRV->>BAR: alloc 53 data pages + 1 PT page
+    DRV-->>RTL: shared_key
+    RTL->>RTL: Slab 0 now full (ELF fills it)
+
     OMP->>RTL: allocate(4000) — x array
-    RTL->>RTL: No slab exists yet
-    RTL->>DRV: ioctl ADD_SHARED (65536)
+    RTL->>RTL: Slab 0 full; slab_size = max(64K, 4K) = 64K
+    RTL->>DRV: ioctl ADD_SHARED (65,536)
     DRV->>BAR: alloc 16 data pages + 1 PT page
     DRV-->>RTL: shared_key
-    RTL->>RTL: Bump: offset 0, watermark → 4000
+    RTL->>RTL: Slab 1 bump: offset 0, watermark → 4000
 
     OMP->>RTL: allocate(4000) — y array
-    RTL->>RTL: Slab has room (61,536 free)
+    RTL->>RTL: Slab 1 has room (61,536 free)
     RTL->>RTL: Bump: offset 4000, watermark → 8000
 
     OMP->>RTL: allocate(4) — scalar
-    RTL->>RTL: Slab has room (57,536 free)
+    RTL->>RTL: Slab 1 has room (57,536 free)
     RTL->>RTL: Bump: offset 8000, watermark → 8016
 
-    Note over BAR: 1 ioctl · 17 pages consumed · 4 B scalar wastes 0 pages
+    Note over BAR: 2 ioctls · ~71 pages consumed · no page-align waste on scalars
 ```
 
 | Metric | Before (per-alloc) | After (pool) | Improvement |
 |--------|-------------------|--------------|-------------|
-| Kernel ioctls | 3 | 1 | **3x fewer** |
-| BAR pages consumed | 6 (3 data + 3 PT) | 17 (16 data + 1 PT) | More data pages, but... |
-| Wasted space (scalar) | 4,092 bytes | 0 bytes | **No page-alignment waste** |
-| Page-table pages | 3 | 1 | **3x fewer** |
-| Total BAR overhead | 24 KB | 68 KB | Higher raw BAR, but fewer ioctls |
+| Kernel ioctls (ELF + 3 data maps) | 4 | 2 | **2× fewer** |
+| Scalar (4 B) page waste | 4,092 bytes | 0 bytes | **No page-alignment waste** |
+| Page-table pages | 4 | 2 | **2× fewer** |
+| Total BAR overhead (SAXPY) | ~236 KB (54 ELF + 3 tiny slabs) | ~284 KB (54 ELF + 17-page data slab) | slightly more BAR, far fewer ioctls |
 
-The tradeoff: the 64 KB slab uses more BAR space upfront than three 4 KB pages. But the slab is reused across the program lifetime (grow-only), and the ioctl reduction dominates in latency-sensitive paths.
+The tradeoff: the 64 KB data slab allocates more BAR up front than three
+isolated 4 KB pages would. In exchange we pay one ioctl instead of three,
+and that slab has ~57 KB of headroom to absorb subsequent allocations
+without any further kernel transitions. The scalar waste (3 × 4 KB of
+padding under the old scheme) disappears entirely.
 
 ## BAR Budget and Page Math
 
-The 4 MiB BAR is partitioned by the device-side driver into control structures (~24 KB) and user data. Each buffer allocation consumes data pages plus page-table pages (1 PT page per 511 data pages).
+The 4 MiB BAR is partitioned by the device-side driver into control
+structures (~24 KB, ~6 pages) and a user-data region of ~1,018 pages.
+The BAR exposes **four concurrent mailboxes** — each plugin instance
+attaches to one. Each instance's pool must therefore leave room for its
+peers: a single instance that eats the entire user region would block
+any concurrent mailbox from doing useful work.
 
 ```mermaid
 flowchart LR
     subgraph bar["PCIe BAR 2 · 4 MiB (1,024 pages)"]
         direction TB
         ctrl["Control Structures<br/>queues + mailboxes<br/>~6 pages"]
-        user["User Data Region<br/>~1,018 pages available"]
-        guard["Pool Guard<br/>MAX_POOL_PAGES = 900"]
+        user["User Data Region<br/>~1,018 pages"]
     end
 
-    subgraph budget["Page Budget Examples"]
-        ex1["64 KB slab:<br/>16 data + 1 PT = 17 pages"]
-        ex2["1 MiB slab:<br/>256 data + 1 PT = 257 pages"]
-        ex3["HPL (N=360):<br/>~322 pages total<br/>ELF + matrix + panels"]
+    subgraph mbox["Per-Mailbox Pool Budget"]
+        direction TB
+        cap["MAX_POOL_PAGES = 500<br/>(~2 MiB per mailbox)"]
+        rationale["half the BAR<br/>⇒ two concurrent mailboxes<br/>coexist comfortably;<br/>lower the constant further<br/>if four will overlap"]
+        cap --> rationale
     end
 
-    user --> guard
-    guard --> budget
+    subgraph workload["HPL (N=360) — Example"]
+        w1["ELF ~217 KB → ~54 pages"]
+        w2["Matrix A ~1 MiB → ~257 pages"]
+        w3["WORK + scalar args → ~10 pages"]
+        wtot["Total ~322 pages<br/>(≈ 64% of a mailbox budget)"]
+        w1 --> wtot
+        w2 --> wtot
+        w3 --> wtot
+    end
+
+    user --> mbox
+    mbox --> workload
 
     style ctrl fill:#c94,color:#fff
-    style guard fill:#cc4,color:#333
+    style cap fill:#cc4,color:#333
     style user fill:#4a9,color:#fff
+    style wtot fill:#49a,color:#fff
 ```
 
-The pool enforces a hard limit of 900 pages (~3.5 MiB), leaving ~118 pages of headroom below the 1,018-page BAR capacity. This prevents the pool from consuming the entire BAR and leaving no room for error recovery or unexpected allocations.
+A fresh slab request past 500 pages returns `nullptr` and propagates up
+as an OOM. HPL at the current 1 MiB per-buffer matrix ceiling consumes
+~322 pages, leaving ~178 pages of headroom inside a single mailbox's
+budget. If future workloads push up against the cap, the right knob to
+turn is whichever fits your concurrency story: raise `MAX_POOL_PAGES`
+if you expect fewer concurrent mailboxes, or lower it further if four
+are expected to share the BAR simultaneously.
 
 ## ELF Images and elf_offset
 

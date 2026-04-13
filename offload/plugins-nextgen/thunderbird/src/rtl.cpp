@@ -63,7 +63,12 @@ struct MemoryPool {
   static constexpr size_t INITIAL_SLAB_SIZE = 64 * 1024;  // 64 KB
   static constexpr size_t ALIGNMENT = 16;
   static constexpr size_t PAGE_SIZE = 4096;
-  static constexpr size_t MAX_POOL_PAGES = 900;  // BAR budget guard (~3.5 MiB)
+  // The 4 MiB BAR exposes four concurrent mailboxes, one per plugin
+  // instance.  Cap each instance's total slab footprint at ~half the
+  // usable region (~2 MiB) so a second concurrent mailbox can coexist
+  // even under memory pressure.  If more than two concurrent instances
+  // are expected, this value should be lowered further.
+  static constexpr size_t MAX_POOL_PAGES = 500;
 
   struct Slab {
     tbird_buffer_t buffer;
@@ -80,13 +85,11 @@ struct MemoryPool {
 
   tbird_context_t ctx = nullptr;
   std::vector<Slab> slabs;
-  size_t next_slab_size = INITIAL_SLAB_SIZE;
   size_t total_pages = 0;
   std::unordered_map<void *, SubAlloc> allocations;
 
   void init(tbird_context_t context) {
     ctx = context;
-    next_slab_size = INITIAL_SLAB_SIZE;
     total_pages = 0;
   }
 
@@ -107,8 +110,11 @@ struct MemoryPool {
       }
     }
 
-    // Need a new slab
-    size_t slab_size = std::max(next_slab_size, aligned);
+    // Need a new slab.  Size is the max of a fixed 64 KB floor and the
+    // current request, page-aligned and capped at the per-buffer limit.
+    // No stateful growth: small allocations land in 64 KB slabs, large
+    // ones (ELF image, HPL matrix A) size their own slab exactly.
+    size_t slab_size = std::max((size_t)INITIAL_SLAB_SIZE, aligned);
     slab_size = (slab_size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
     if (slab_size > TBIRD_MAX_BUFFER_SIZE)
       slab_size = TBIRD_MAX_BUFFER_SIZE;
@@ -139,7 +145,6 @@ struct MemoryPool {
     void *base = tbird_buffer_host_ptr(buf);
     slabs.push_back({buf, base, slab_size, 0});
     total_pages += data_pages + pt_pages;
-    next_slab_size = std::min(next_slab_size * 2, (size_t)TBIRD_MAX_BUFFER_SIZE);
 
     // Allocate from fresh slab
     Slab &fresh = slabs.back();
@@ -182,7 +187,6 @@ struct MemoryPool {
     slabs.clear();
     allocations.clear();
     total_pages = 0;
-    next_slab_size = INITIAL_SLAB_SIZE;
     DP("POOL: destroyed all slabs\n");
   }
 };
