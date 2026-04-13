@@ -43,13 +43,13 @@ The pool pre-allocates large slabs via a single ioctl and sub-allocates within t
 flowchart TD
     subgraph pool["Memory Pool (in ThunderbirdDeviceTy)"]
         direction TB
-        state["next_slab_size: 64K → 128K → ... → 1 MiB<br/>total_pages: running BAR budget<br/>allocations: ptr → {slab, offset, size}"]
+        state["next_slab_size floor: 64K → 128K → 256K → ... → 1 MiB<br/>total_pages: running BAR budget<br/>allocations: ptr → {slab, offset, size}"]
 
-        subgraph slab0["Slab 0 · 64 KB"]
+        subgraph slab0["Slab 0 · ~220 KB<br/>(grown to fit first allocation)"]
             elf["ELF Image<br/>~216 KB"]
         end
 
-        subgraph slab1["Slab 1 · 128 KB"]
+        subgraph slab1["Slab 1 · 128 KB<br/>(floor after first doubling)"]
             buf_x["x array<br/>4000 B"]
             buf_y["y array<br/>4000 B"]
             buf_s["scalar<br/>4 B"]
@@ -68,6 +68,8 @@ flowchart TD
     style buf_s fill:#49a,color:#fff
     style free1 fill:#ddd,color:#666
 ```
+
+**Slab sizing.** A new slab is allocated at `max(next_slab_size, requested_size)`, page-aligned, capped at `TBIRD_MAX_BUFFER_SIZE`. `INITIAL_SLAB_SIZE = 64 KB` is the *floor* for the first slab — it is not a hard cap. An HPL run, for example, loads its ~216 KB device ELF through the pool before any data map, so Slab 0 grows to ~220 KB on the very first allocation. After that call, `next_slab_size` doubles to 128 KB, which becomes the floor for Slab 1. The doubling continues up to the 1 MiB per-buffer cap.
 
 ## Allocation Flow
 
