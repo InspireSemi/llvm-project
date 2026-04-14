@@ -135,26 +135,26 @@ sequenceDiagram
     Note over OMP,BAR: After: Pool Model (SAXPY)
 
     OMP->>RTL: loadBinary (ELF ~217 KB)
-    RTL->>RTL: No slab yet; slab_size = max(64K, 217K) = 217K
+    RTL->>RTL: No slab yet · 217K (≥ 64K floor)
     RTL->>DRV: ioctl ADD_SHARED (~217 KB)
     DRV->>BAR: alloc 53 data pages + 1 PT page
     DRV-->>RTL: shared_key
     RTL->>RTL: Slab 0 now full (ELF fills it)
 
     OMP->>RTL: allocate(4000) — x array
-    RTL->>RTL: Slab 0 full; slab_size = max(64K, 4K) = 64K
-    RTL->>DRV: ioctl ADD_SHARED (65,536)
+    RTL->>RTL: Slab 0 full · new slab 64K (≥ 64K floor)
+    RTL->>DRV: ioctl ADD_SHARED (65536)
     DRV->>BAR: alloc 16 data pages + 1 PT page
     DRV-->>RTL: shared_key
-    RTL->>RTL: Slab 1 bump: offset 0, watermark → 4000
+    RTL->>RTL: Slab 1 bump: offset 0 · watermark → 4000
 
     OMP->>RTL: allocate(4000) — y array
-    RTL->>RTL: Slab 1 has room (61,536 free)
-    RTL->>RTL: Bump: offset 4000, watermark → 8000
+    RTL->>RTL: Slab 1 has room (61536 free)
+    RTL->>RTL: Bump: offset 4000 · watermark → 8000
 
     OMP->>RTL: allocate(4) — scalar
-    RTL->>RTL: Slab 1 has room (57,536 free)
-    RTL->>RTL: Bump: offset 8000, watermark → 8016
+    RTL->>RTL: Slab 1 has room (57536 free)
+    RTL->>RTL: Bump: offset 8000 · watermark → 8016
 
     Note over BAR: 2 ioctls · ~71 pages consumed · no page-align waste on scalars
 ```
