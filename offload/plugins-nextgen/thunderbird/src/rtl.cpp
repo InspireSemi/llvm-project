@@ -63,12 +63,14 @@ struct MemoryPool {
   static constexpr size_t INITIAL_SLAB_SIZE = 64 * 1024;  // 64 KB
   static constexpr size_t ALIGNMENT = 16;
   static constexpr size_t PAGE_SIZE = 4096;
-  // The 4 MiB BAR exposes four concurrent mailboxes, one per plugin
-  // instance.  Cap each instance's total slab footprint at ~half the
-  // usable region (~2 MiB) so a second concurrent mailbox can coexist
-  // even under memory pressure.  If more than two concurrent instances
-  // are expected, this value should be lowered further.
-  static constexpr size_t MAX_POOL_PAGES = 500;
+  // The 4 MiB BAR (~1018 usable pages) is shared among up to four
+  // concurrent mailboxes.  Cap each instance's slab footprint at 750
+  // pages (~3 MiB) so a second concurrent instance can still start
+  // (1018 - 750 = 268 pages ~ 1 MiB for the second instance).
+  // HPL at N=360 consumes significantly more pages than the
+  // theoretical ~330 estimate due to grow-only scalar accumulation
+  // across hundreds of target regions.
+  static constexpr size_t MAX_POOL_PAGES = 750;
 
   struct Slab {
     tbird_buffer_t buffer;
@@ -145,6 +147,12 @@ struct MemoryPool {
     void *base = tbird_buffer_host_ptr(buf);
     slabs.push_back({buf, base, slab_size, 0});
     total_pages += data_pages + pt_pages;
+
+    // Always print slab creation — visible in session log even without
+    // LIBOMPTARGET_DEBUG=1, critical for diagnosing budget exhaustion.
+    fprintf(stderr, "POOL: new slab %zu: %zu bytes (%zu+%zu pages, total %zu/%zu)\n",
+            slabs.size() - 1, slab_size, data_pages, pt_pages,
+            total_pages, MAX_POOL_PAGES);
 
     // Allocate from fresh slab
     Slab &fresh = slabs.back();
