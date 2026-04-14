@@ -64,19 +64,17 @@ struct MemoryPool {
   static constexpr size_t ALIGNMENT = 16;
   static constexpr size_t PAGE_SIZE = 4096;
   // The 4 MiB BAR (~1018 usable pages) is shared among up to four
-  // concurrent mailboxes.  Cap each instance's slab footprint at 750
-  // pages (~3 MiB) so a second concurrent instance can still start
-  // (1018 - 750 = 268 pages ~ 1 MiB for the second instance).
-  // HPL at N=360 consumes significantly more pages than the
-  // theoretical ~330 estimate due to grow-only scalar accumulation
-  // across hundreds of target regions.
-  static constexpr size_t MAX_POOL_PAGES = 750;
+  // concurrent mailboxes.  Cap each instance's total slab footprint
+  // at ~half the usable region (~2 MiB) so a second concurrent
+  // mailbox can coexist even under memory pressure.
+  static constexpr size_t MAX_POOL_PAGES = 500;
 
   struct Slab {
     tbird_buffer_t buffer;
-    void *base;       // host VA from tbird_buffer_host_ptr()
+    void *base;        // host VA from tbird_buffer_host_ptr()
     size_t capacity;
-    size_t watermark;  // next free offset
+    size_t watermark;  // next free offset (resets to 0 when fully drained)
+    size_t live_count; // active sub-allocations; when 0, slab is reclaimable
   };
 
   struct SubAlloc {
@@ -99,15 +97,19 @@ struct MemoryPool {
   void *allocate(size_t size) {
     size_t aligned = (size + ALIGNMENT - 1) & ~(ALIGNMENT - 1);
 
-    // Try current (last) slab
-    if (!slabs.empty()) {
-      Slab &cur = slabs.back();
-      if (cur.watermark + aligned <= cur.capacity) {
-        void *ptr = (char *)cur.base + cur.watermark;
-        allocations[ptr] = {slabs.size() - 1, cur.watermark, size};
-        cur.watermark += aligned;
+    // Try existing slabs (prefer most-recently-created, scan backwards).
+    // A slab whose live_count hit 0 has had its watermark reset to 0 and
+    // is fully reusable — this is how HPL's residual check reuses the
+    // solve-phase matrix slab instead of allocating a second one.
+    for (size_t i = slabs.size(); i > 0; i--) {
+      Slab &s = slabs[i - 1];
+      if (s.watermark + aligned <= s.capacity) {
+        void *ptr = (char *)s.base + s.watermark;
+        allocations[ptr] = {i - 1, s.watermark, size};
+        s.watermark += aligned;
+        s.live_count++;
         DP("POOL: sub-alloc %zu bytes in slab %zu at offset %zu → %p\n",
-           size, slabs.size() - 1, cur.watermark - aligned, ptr);
+           size, i - 1, s.watermark - aligned, ptr);
         return ptr;
       }
     }
@@ -145,7 +147,7 @@ struct MemoryPool {
     }
 
     void *base = tbird_buffer_host_ptr(buf);
-    slabs.push_back({buf, base, slab_size, 0});
+    slabs.push_back({buf, base, slab_size, 0, 0});
     total_pages += data_pages + pt_pages;
 
     // Always print slab creation — visible in session log even without
@@ -159,6 +161,7 @@ struct MemoryPool {
     void *ptr = (char *)fresh.base + fresh.watermark;
     allocations[ptr] = {slabs.size() - 1, fresh.watermark, size};
     fresh.watermark += aligned;
+    fresh.live_count++;
     DP("POOL: sub-alloc %zu bytes in new slab %zu at offset 0 → %p\n",
        size, slabs.size() - 1, ptr);
     return ptr;
@@ -182,9 +185,21 @@ struct MemoryPool {
     return {nullptr, 0};
   }
 
-  /// Remove a sub-allocation from tracking (no DMA release — grow-only).
+  /// Remove a sub-allocation from tracking.  When all sub-allocations in
+  /// a slab have been deallocated, the slab's watermark resets to 0 and it
+  /// becomes reusable for new bump-allocations.  No DMA pages are released
+  /// — the slab stays allocated until destroy().
   void deallocate(void *ptr) {
-    allocations.erase(ptr);
+    auto it = allocations.find(ptr);
+    if (it != allocations.end()) {
+      size_t idx = it->second.slab_idx;
+      allocations.erase(it);
+      if (--slabs[idx].live_count == 0) {
+        slabs[idx].watermark = 0;
+        DP("POOL: slab %zu fully drained → reclaimed (capacity %zu)\n",
+           idx, slabs[idx].capacity);
+      }
+    }
   }
 
   /// Free all slabs. Call from deinitImpl().
