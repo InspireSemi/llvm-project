@@ -75,6 +75,9 @@ struct MemoryPool {
     size_t capacity;
     size_t watermark;  // next free offset (resets to 0 when fully drained)
     size_t live_count; // active sub-allocations; when 0, slab is reclaimable
+    bool exclusive;    // true = sized for one big allocation; no cohabitation
+                       // while live_count > 0 (prevents small siblings from
+                       // pinning the slab and blocking reclamation).
   };
 
   struct SubAlloc {
@@ -101,8 +104,18 @@ struct MemoryPool {
     // A slab whose live_count hit 0 has had its watermark reset to 0 and
     // is fully reusable — this is how HPL's residual check reuses the
     // solve-phase matrix slab instead of allocating a second one.
+    //
+    // Skip exclusive slabs while they have a live tenant: allowing small
+    // siblings onto a big-allocation slab keeps live_count > 0 after the
+    // big tenant leaves, so the watermark never resets and the slab can
+    // never be reclaimed (see HPL N=360 pre-fix: Matrix A + 9 small
+    // scalars on slab 1 → slab 1 never drained → 4-slab budget blowup).
+    // Once the lone tenant frees and live_count hits 0, the slab becomes
+    // eligible again for any allocation (big or small).
     for (size_t i = slabs.size(); i > 0; i--) {
       Slab &s = slabs[i - 1];
+      if (s.exclusive && s.live_count > 0)
+        continue;
       if (s.watermark + aligned <= s.capacity) {
         void *ptr = (char *)s.base + s.watermark;
         allocations[ptr] = {i - 1, s.watermark, size};
@@ -147,7 +160,12 @@ struct MemoryPool {
     }
 
     void *base = tbird_buffer_host_ptr(buf);
-    slabs.push_back({buf, base, slab_size, 0, 0});
+    // Mark the slab exclusive iff it was upsized past INITIAL_SLAB_SIZE for
+    // this one allocation.  That matches the big-one-shot-tenant pattern
+    // (ELF image, HPL matrix) we want reclaimable.  Plain INITIAL_SLAB_SIZE
+    // slabs stay shared so small allocations pack together as before.
+    bool is_exclusive = (slab_size > INITIAL_SLAB_SIZE);
+    slabs.push_back({buf, base, slab_size, 0, 0, is_exclusive});
     total_pages += data_pages + pt_pages;
 
     // Always print slab creation — visible in session log even without
