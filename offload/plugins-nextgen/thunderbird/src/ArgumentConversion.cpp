@@ -15,6 +15,8 @@ namespace omp {
 namespace target {
 namespace plugin {
 
+using namespace error;
+
 tbird_arg_type_t convert_omp_ctype_to_tbird(uint8_t omp_ctype) {
   // OpenMP C types from offload/include/omptarget.h lines 135-152
   switch (omp_ctype) {
