@@ -1,7 +1,11 @@
 # Create the library and add the default arguments.
 add_target_library(omptarget.rtl.thunderbird THUNDERBIRD)
 
-target_sources(omptarget.rtl.thunderbird PRIVATE src/rtl.cpp)
+target_sources(omptarget.rtl.thunderbird PRIVATE
+  src/rtl.cpp
+  src/MemoryPool.cpp
+  src/ArgumentConversion.cpp
+)
 
 # Offload platform integration (required - Phase 5 cleanup complete)
 set(OFFLOAD_PLATFORM_PATH "" CACHE PATH "Path to offload-platform repository")
