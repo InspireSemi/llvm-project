@@ -98,6 +98,14 @@ Error convertPointerArgument(uint32_t OmpIdx, tbird_arg_t &OutArg,
                         "Pointer index %u >= NumPtrs %u", PtrIndex, NumPtrs);
   }
 
+  // Guard against a null slot in LaunchParams.Ptrs — the indirection below
+  // would otherwise segfault. A pointer-typed argument with no entry is an
+  // error; the caller set up LaunchParams incorrectly.
+  if (!Ctx.LaunchParams.Ptrs[PtrIndex]) {
+    return Plugin::error(ErrorCode::UNKNOWN,
+                        "LaunchParams.Ptrs[%u] is NULL", PtrIndex);
+  }
+
   void *DevicePtr = *(void**)Ctx.LaunchParams.Ptrs[PtrIndex];
 
   // Verify it's in buffer registry (supports interior pointers)
@@ -118,10 +126,15 @@ Error convertScalarArgument(uint32_t OmpIdx, tbird_arg_t &OutArg,
   bool IsLiteral = (MapType & 0x100); // OMP_TGT_MAPTYPE_LITERAL
   size_t ScalarSize = getScalarSize(OutArg.type);
 
-  // Check if scalar has device memory mapping (by-reference via Ptrs array)
+  // Check if scalar has device memory mapping (by-reference via Ptrs array).
+  // The null-slot guard lets a scalar arg coexist with a partially-populated
+  // LaunchParams.Ptrs (e.g. the scalar has no device backing at that index) —
+  // skip the promote-to-PTR branch and fall through to the literal/copy path
+  // instead of segfaulting on the indirection.
   if (Ctx.LaunchParams.Ptrs && !IsLiteral) {
     uint32_t PtrIndex = OmpIdx + Ctx.KLEOffset;
-    if (PtrIndex < Ctx.LaunchParams.Size / sizeof(void*)) {
+    if (PtrIndex < Ctx.LaunchParams.Size / sizeof(void*) &&
+        Ctx.LaunchParams.Ptrs[PtrIndex] != nullptr) {
       void *PotentialDevicePtr = *(void**)Ctx.LaunchParams.Ptrs[PtrIndex];
 
       DP("    Checking LaunchParams.Ptrs[%u]=%p, dereferenced=*Ptrs[%u]=%p\n",
