@@ -13,7 +13,9 @@
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
+#include <cstdlib>
 #include <ffi.h>
+#include <glob.h>
 #include <string>
 #include <variant>
 #include <unordered_map>
@@ -57,8 +59,11 @@
 // MemoryPool and ArgumentConversion are now in separate .h/.cpp files.
 // See MemoryPool.h, MemoryPool.cpp, ArgumentConversion.h, ArgumentConversion.cpp.
 
-// The number of devices in this plugin.
-#define THUNDERBIRD_NUM_DEVICES 1
+// The number of OpenMP devices the plugin exposes is discovered at init
+// time by enumerating /dev/tbird*-K char devices the host driver creates,
+// one per application mailbox. See discoverThunderbirdDevicePaths() below.
+// THUNDERBIRD_DEVICE_PATH=<path> forces a single-device legacy mode using
+// the supplied path.
 
 // The maximum number of physical cores in this plugin.
 #define THUNDERBIRD_MAX_THREADS 6144
@@ -77,6 +82,36 @@ namespace plugin {
 struct ThunderbirdKernelTy;
 struct ThunderbirdDeviceTy;
 struct ThunderbirdPluginTy;
+
+/// Application-mailbox device path discovery.
+///
+/// The host driver (tbird_offload.ko) exposes one /dev/tbird<PCI>-<K> char
+/// device per application mailbox. Each maps 1:1 onto an OpenMP device at
+/// the libomptarget layer. Discovery is cached in a function-static so
+/// initImpl() in plugin and device share a consistent view across calls.
+///
+/// Override path: setting THUNDERBIRD_DEVICE_PATH=<path> forces a single
+/// device using the explicit path (legacy single-device mode).
+static const std::vector<std::string> &getThunderbirdDevicePaths() {
+  static std::vector<std::string> paths = []() {
+    std::vector<std::string> p;
+    if (const char *override_path = getenv("THUNDERBIRD_DEVICE_PATH")) {
+      p.emplace_back(override_path);
+      return p;
+    }
+    glob_t g;
+    if (glob("/dev/tbird*-*", 0, nullptr, &g) == 0) {
+      for (size_t i = 0; i < g.gl_pathc; ++i)
+        p.emplace_back(g.gl_pathv[i]);
+    }
+    globfree(&g);
+    // glob() returns lexicographically-sorted output; for the current A0
+    // cap of 2 ("tbird*-0", "tbird*-1") this produces the right order.
+    // If K >= 10 ever ships, switch to numeric-suffix sort.
+    return p;
+  }();
+  return paths;
+}
 
 using llvm::sys::DynamicLibrary;
 using namespace error;
@@ -165,28 +200,33 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
 
   /// Initialize the device
   Error initImpl(GenericPluginTy &Plugin) override {
-    DP("=== Phase 2/3: initImpl START ===\n");
-    fprintf(stderr, "[THUNDERBIRD RTL] Device initImpl called\n");
+    DP("=== Phase 2/3: initImpl START (DeviceId=%d) ===\n", DeviceId);
+    fprintf(stderr, "[THUNDERBIRD RTL] Device %d initImpl called\n", DeviceId);
     fflush(stderr);
-    
-    // Get device path from environment or use default
-    const char *device_path = getenv("THUNDERBIRD_DEVICE_PATH");
-    if (!device_path) {
-      device_path = "/dev/tbird0018-0";
-      DP("Using default device path: %s\n", device_path);
-    } else {
-      DP("Using environment device path: %s\n", device_path);
+
+    // Per-DeviceId path lookup. Plugin-level discovery already populated
+    // the cached path list; index by DeviceId. Bounds check is a sanity
+    // assertion since libomptarget never asks for a DeviceId outside
+    // [0, NumDevices) returned by ThunderbirdPluginTy::initImpl().
+    const auto &paths = getThunderbirdDevicePaths();
+    if (DeviceId < 0 || (size_t)DeviceId >= paths.size()) {
+      return Plugin::error(ErrorCode::UNKNOWN,
+                           "Thunderbird plugin DeviceId %d out of range "
+                           "(discovered %zu device paths)",
+                           DeviceId, paths.size());
     }
-    
-    DP("Calling tbird_init(device_path=%s, num_mailboxes=1)\n", device_path);
-    
-    // Initialize context with single mailbox (single-threaded operation)
-    ctx = tbird_init(device_path, 1);
+    const std::string &device_path = paths[DeviceId];
+    DP("DeviceId=%d -> device_path=%s\n", DeviceId, device_path.c_str());
+
+    // Each plugin-level OpenMP device opens a single application mailbox
+    // (1:1 mapping). num_mailboxes=1 is intentional: this is the count of
+    // mailboxes per tbird_init() call, not the system-wide total.
+    ctx = tbird_init(device_path.c_str(), 1);
     if (!ctx) {
       DP("ERROR: tbird_init returned NULL\n");
       return Plugin::error(ErrorCode::UNKNOWN,
-                          "Failed to initialize Thunderbird context: device=%s", 
-                          device_path);
+                          "Failed to initialize Thunderbird context: device=%s",
+                          device_path.c_str());
     }
     
     DP("SUCCESS: Thunderbird context initialized: ctx=%p\n", (void*)ctx);
@@ -915,7 +955,10 @@ struct ThunderbirdPluginTy final : public GenericPluginTy {
       return std::move(Err);
 #endif
 
-    return THUNDERBIRD_NUM_DEVICES;
+    const auto &paths = getThunderbirdDevicePaths();
+    DP("Thunderbird plugin discovered %zu application mailbox device(s)\n",
+       paths.size());
+    return static_cast<int32_t>(paths.size());
   }
 
   /// Deinitialize the plugin.
