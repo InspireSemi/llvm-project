@@ -201,8 +201,6 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
   /// Initialize the device
   Error initImpl(GenericPluginTy &Plugin) override {
     DP("=== Phase 2/3: initImpl START (DeviceId=%d) ===\n", DeviceId);
-    fprintf(stderr, "[THUNDERBIRD RTL] Device %d initImpl called\n", DeviceId);
-    fflush(stderr);
 
     // Per-DeviceId path lookup. Plugin-level discovery already populated
     // the cached path list; index by DeviceId. Bounds check is a sanity
@@ -216,6 +214,13 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
                            DeviceId, paths.size());
     }
     const std::string &device_path = paths[DeviceId];
+    // Emit per-device-id path on stderr so external tests can verify the
+    // discovered path list is indexed correctly (DeviceId K maps to path
+    // path[K], not some other element). Format kept stable for parsing.
+    fprintf(stderr,
+            "[THUNDERBIRD RTL] Device %d initImpl called (path=%s)\n",
+            DeviceId, device_path.c_str());
+    fflush(stderr);
     DP("DeviceId=%d -> device_path=%s\n", DeviceId, device_path.c_str());
 
     // Each plugin-level OpenMP device opens a single application mailbox
