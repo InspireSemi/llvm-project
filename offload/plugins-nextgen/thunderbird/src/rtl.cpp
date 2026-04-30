@@ -14,7 +14,6 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdlib>
-#include <cstring>
 #include <ffi.h>
 #include <glob.h>
 #include <string>
@@ -645,46 +644,25 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     return Plugin::success();
   }
 
-  /// Device-to-device data exchange for co-located mailbox pairs.
-  ///
-  /// libomptarget only calls this when ThunderbirdPluginTy::isDataExchangable
-  /// returned true, which (per the topology predicate) means src and dst
-  /// are mailboxes on the same physical Thunderbird, sharing BAR2/ivshmem
-  /// backing. Both SrcPtr and DstPtr are valid host-virtual addresses in
-  /// the plugin process, each in its own MAP_SHARED mmap of its mailbox's
-  /// region. A plain in-process memcpy reads from SrcPtr's mmap and writes
-  /// to DstPtr's mmap; the underlying shared physical pages mean no
-  /// page-cache writeback or device-IO is incurred. End-to-end the
-  /// optimization eliminates libomptarget's malloc + retrieveData +
-  /// submitData host-bounce dance for cross-mailbox memcpy.
-  ///
-  /// Cross-physical pairs never reach this function — isDataExchangable
-  /// returned false for them, so libomptarget host-bounces. The
-  /// defense-in-depth check below is a sanity assertion: if libomptarget
-  /// ever called us for a non-co-located pair, return UNSUPPORTED so the
-  /// host-bounce fallback takes over.
+  /// Device-to-device data exchange. Currently always UNSUPPORTED —
+  /// ThunderbirdPluginTy::isDataExchangable returns false on every
+  /// pair (see the comment there for the slab-pool isolation finding
+  /// that retired the previous co-located memcpy fast-path). With
+  /// isDataExchangable=false, libomptarget never calls this function;
+  /// the UNSUPPORTED return is a defense-in-depth assertion in case
+  /// the predicate ever flips back on without a corresponding fast-
+  /// path implementation.
   Error dataExchangeImpl(const void *SrcPtr, GenericDeviceTy &DstGenericDevice,
                          void *DstPtr, int64_t Size,
                          AsyncInfoWrapperTy &AsyncInfoWrapper) override {
     int32_t SrcId = this->getDeviceId();
     int32_t DstId = DstGenericDevice.getDeviceId();
-    DP("dataExchangeImpl: %ld bytes from %p (DeviceId %d) to %p "
-       "(DeviceId %d)\n", Size, SrcPtr, SrcId, DstPtr, DstId);
-
-    if (!areThunderbirdDevicesCoLocated(SrcId, DstId)) {
-      // Should not reach here under normal operation; isDataExchangable
-      // would have returned false. If we do, signal UNSUPPORTED so
-      // libomptarget falls back to its host-bounce path rather than
-      // silently producing incorrect data.
-      return Plugin::error(ErrorCode::UNSUPPORTED,
-                           "dataExchangeImpl reached for non-co-located "
-                           "pair (src DeviceId %d, dst DeviceId %d) — "
-                           "isDataExchangable should have returned false",
-                           SrcId, DstId);
-    }
-
-    memcpy(DstPtr, SrcPtr, (size_t)Size);
-    return Plugin::success();
+    return Plugin::error(ErrorCode::UNSUPPORTED,
+                         "dataExchangeImpl unsupported on Thunderbird "
+                         "(src DeviceId %d, dst DeviceId %d, %ld bytes); "
+                         "libomptarget should have host-bounced via "
+                         "isDataExchangable=false",
+                         SrcId, DstId, (long)Size);
   }
 
   /// All functions are already synchronous. No need to do anything on this
@@ -1033,17 +1011,35 @@ struct ThunderbirdPluginTy final : public GenericPluginTy {
     return llvm::ELF::EM_RISCV;
   }
 
-  /// Topology-aware d2d exchange capability check. True iff src and dst
-  /// mailboxes are on the same physical Thunderbird (same PCI BDF prefix
-  /// in the discovered /dev/tbird*-K paths) — those pairs share
-  /// BAR2/ivshmem backing and can be served by the plugin's
-  /// dataExchangeImpl as a plain in-process memcpy. False for cross-
-  /// physical pairs, where libomptarget falls back to its existing
-  /// host-bounce d2d implementation. Same omp_target_memcpy API call
-  /// works on every pair the runtime discovers; only the speed
-  /// differs by topology.
-  bool isDataExchangable(int32_t SrcDeviceId, int32_t DstDeviceId) override {
-    return areThunderbirdDevicesCoLocated(SrcDeviceId, DstDeviceId);
+  /// Returns false unconditionally on this stack — libomptarget host-
+  /// bounces every cross-device omp_target_memcpy via its malloc +
+  /// retrieveData + submitData fallback (offload/libomptarget/OpenMP/
+  /// API.cpp:258-280). That path is correct on every pair the runtime
+  /// discovers, regardless of co-location.
+  ///
+  /// History: an earlier Phase 8 attempt returned true for co-located
+  /// pairs and implemented dataExchangeImpl as a plain memcpy across
+  /// the two host-side mmap VAs, on the assumption that mailboxes on
+  /// the same physical Thunderbird shared BAR2/ivshmem backing.
+  /// topology_correctness_e2e (offload-debug) falsified the assumption:
+  /// even on co-located pairs, the host_ptr returned by
+  /// omp_target_alloc on each device is in that device's OWN host-
+  /// side slab pool, NOT a shared physical region. A naive memcpy
+  /// across host VAs writes into the source process's memory but
+  /// never reaches the destination device's worker view; the
+  /// readback returns junk. (One direction of the test passed by
+  /// coincidence — stale ref data from a prior iteration sat at the
+  /// reused slab offset and matched the expected pattern.)
+  ///
+  /// A real co-located fast path would need to translate each
+  /// host_ptr to its abstract handle (shared_key + offset in the
+  /// per-device slab pool) and use a driver/firmware-mediated
+  /// transfer between the two devices' slab pools. That work is out
+  /// of scope here. The Topology module + co-location predicate are
+  /// retained as the foundation for a future implementation.
+  bool isDataExchangable(int32_t /*SrcDeviceId*/,
+                         int32_t /*DstDeviceId*/) override {
+    return false;
   }
 
   /// All images (ELF-compatible) should be compatible with this plugin.
