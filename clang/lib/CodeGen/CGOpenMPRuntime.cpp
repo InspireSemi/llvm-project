@@ -8835,6 +8835,17 @@ public:
           OpenMPOffloadMappingFlags::OMP_MAP_LITERAL |
           OpenMPOffloadMappingFlags::OMP_MAP_TARGET_PARAM);
       CurCaptureVarInfo.Mappers.push_back(nullptr);
+      // Thunderbird-fork extension: keep the CTypes parallel array
+      // in lockstep with the upstream BasePointers/Pointers/Sizes/
+      // Types/Mappers arrays. is_device_ptr passes the pointer by
+      // value as an opaque address, so VoidPtrTy is the right C-type
+      // (matching the Sizes entry above which sizes it as VoidPtrTy).
+      // Without this push the lockstep assertion in
+      // genMapInfoForCaptures(): "Inconsistent map information
+      // sizes!" trips for any target region capturing an
+      // is_device_ptr-marked pointer.
+      CurCaptureVarInfo.CTypes.push_back(
+          getCTypeForQualType(CGF.getContext().VoidPtrTy));
       return;
     }
 
