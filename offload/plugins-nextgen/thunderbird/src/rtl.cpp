@@ -14,6 +14,7 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdlib>
+#include <cstring>
 #include <ffi.h>
 #include <glob.h>
 #include <string>
@@ -40,6 +41,7 @@
 // Thunderbird plugin modules
 #include "MemoryPool.h"
 #include "ArgumentConversion.h"
+#include "Topology.h"
 
 // New offload-platform API
 #include "tbird_offload_api.h"
@@ -111,6 +113,21 @@ static const std::vector<std::string> &getThunderbirdDevicePaths() {
     return p;
   }();
   return paths;
+}
+
+/// Glue: look paths up by DeviceId and call into the Topology module's
+/// pure predicate. The string-prefix logic lives in Topology.cpp where
+/// it's unit-testable in isolation; this wrapper just resolves int IDs
+/// against the cached path list before delegating.
+static bool areThunderbirdDevicesCoLocated(int32_t SrcDeviceId,
+                                           int32_t DstDeviceId) {
+  const auto &paths = getThunderbirdDevicePaths();
+  if (SrcDeviceId < 0 || (size_t)SrcDeviceId >= paths.size())
+    return false;
+  if (DstDeviceId < 0 || (size_t)DstDeviceId >= paths.size())
+    return false;
+  return thunderbird::topology::arePathsCoLocated(paths[SrcDeviceId],
+                                                  paths[DstDeviceId]);
 }
 
 using llvm::sys::DynamicLibrary;
@@ -628,15 +645,46 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     return Plugin::success();
   }
 
-  /// Exchange data between two devices within the plugin. This function is not
-  /// supported in this plugin.
+  /// Device-to-device data exchange for co-located mailbox pairs.
+  ///
+  /// libomptarget only calls this when ThunderbirdPluginTy::isDataExchangable
+  /// returned true, which (per the topology predicate) means src and dst
+  /// are mailboxes on the same physical Thunderbird, sharing BAR2/ivshmem
+  /// backing. Both SrcPtr and DstPtr are valid host-virtual addresses in
+  /// the plugin process, each in its own MAP_SHARED mmap of its mailbox's
+  /// region. A plain in-process memcpy reads from SrcPtr's mmap and writes
+  /// to DstPtr's mmap; the underlying shared physical pages mean no
+  /// page-cache writeback or device-IO is incurred. End-to-end the
+  /// optimization eliminates libomptarget's malloc + retrieveData +
+  /// submitData host-bounce dance for cross-mailbox memcpy.
+  ///
+  /// Cross-physical pairs never reach this function — isDataExchangable
+  /// returned false for them, so libomptarget host-bounces. The
+  /// defense-in-depth check below is a sanity assertion: if libomptarget
+  /// ever called us for a non-co-located pair, return UNSUPPORTED so the
+  /// host-bounce fallback takes over.
   Error dataExchangeImpl(const void *SrcPtr, GenericDeviceTy &DstGenericDevice,
                          void *DstPtr, int64_t Size,
                          AsyncInfoWrapperTy &AsyncInfoWrapper) override {
-    // This function should never be called because the function
-    // ThunderbirdPluginTy::isDataExchangable() returns false.
-    return Plugin::error(ErrorCode::UNSUPPORTED,
-                         "dataExchangeImpl not supported");
+    int32_t SrcId = this->getDeviceId();
+    int32_t DstId = DstGenericDevice.getDeviceId();
+    DP("dataExchangeImpl: %ld bytes from %p (DeviceId %d) to %p "
+       "(DeviceId %d)\n", Size, SrcPtr, SrcId, DstPtr, DstId);
+
+    if (!areThunderbirdDevicesCoLocated(SrcId, DstId)) {
+      // Should not reach here under normal operation; isDataExchangable
+      // would have returned false. If we do, signal UNSUPPORTED so
+      // libomptarget falls back to its host-bounce path rather than
+      // silently producing incorrect data.
+      return Plugin::error(ErrorCode::UNSUPPORTED,
+                           "dataExchangeImpl reached for non-co-located "
+                           "pair (src DeviceId %d, dst DeviceId %d) — "
+                           "isDataExchangable should have returned false",
+                           SrcId, DstId);
+    }
+
+    memcpy(DstPtr, SrcPtr, (size_t)Size);
+    return Plugin::success();
   }
 
   /// All functions are already synchronous. No need to do anything on this
@@ -985,9 +1033,17 @@ struct ThunderbirdPluginTy final : public GenericPluginTy {
     return llvm::ELF::EM_RISCV;
   }
 
-  /// This plugin does not support exchanging data between two devices.
+  /// Topology-aware d2d exchange capability check. True iff src and dst
+  /// mailboxes are on the same physical Thunderbird (same PCI BDF prefix
+  /// in the discovered /dev/tbird*-K paths) — those pairs share
+  /// BAR2/ivshmem backing and can be served by the plugin's
+  /// dataExchangeImpl as a plain in-process memcpy. False for cross-
+  /// physical pairs, where libomptarget falls back to its existing
+  /// host-bounce d2d implementation. Same omp_target_memcpy API call
+  /// works on every pair the runtime discovers; only the speed
+  /// differs by topology.
   bool isDataExchangable(int32_t SrcDeviceId, int32_t DstDeviceId) override {
-    return false;
+    return areThunderbirdDevicesCoLocated(SrcDeviceId, DstDeviceId);
   }
 
   /// All images (ELF-compatible) should be compatible with this plugin.

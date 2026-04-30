@@ -5,6 +5,7 @@ target_sources(omptarget.rtl.thunderbird PRIVATE
   src/rtl.cpp
   src/MemoryPool.cpp
   src/ArgumentConversion.cpp
+  src/Topology.cpp
 )
 
 # Offload platform integration (required - Phase 5 cleanup complete)
