@@ -23,6 +23,27 @@
 
 using namespace ompx;
 
+#ifdef OMPTARGET_DEVICE_THUNDERBIRD
+// On the Thunderbird (Linux/pthread) device path the parallel region is created
+// by __kmpc_fork_call (Parallelism.cpp), which records the calling thread's
+// OpenMP identity in thread-local state rather than in the generic ICV stack:
+// icv::Level / icv::ActiveLevel / state::ParallelTeamSize are never updated on
+// this path. The OpenMP query entry points below therefore read that
+// thread-local state through these accessors instead of the generic ICVs;
+// otherwise every query collapses to its serial value (thread_num 0,
+// num_threads 1) regardless of the actual team. This mirrors the existing
+// __kmpc_global_thread_num Thunderbird specialization.
+extern "C" uint32_t __tbird_get_thread_id(void);
+extern "C" uint32_t __tbird_get_team_size(void);
+
+namespace {
+// In-region nesting depth reported by the single-level Thunderbird fork: 1
+// while a team of more than one thread is active, 0 when serial. Nested
+// parallelism is not realized on this path.
+inline int tbirdLevel() { return __tbird_get_team_size() > 1 ? 1 : 0; }
+} // namespace
+#endif
+
 /// Memory implementation
 ///
 ///{
@@ -241,8 +262,10 @@ Local<state::ThreadStateTy **> ompx::state::ThreadStates;
 
 namespace {
 
-int returnValIfLevelIsActive(int Level, int Val, int DefaultVal,
-                             int OutOfBoundsVal = -1) {
+// Unused on the Thunderbird path (the omp_get_* entry points read thread-local
+// team state directly there); retained for the GPU path.
+[[maybe_unused]] int returnValIfLevelIsActive(int Level, int Val, int DefaultVal,
+                                              int OutOfBoundsVal = -1) {
   if (Level == 0)
     return DefaultVal;
   int LevelVar = omp_get_level();
@@ -357,14 +380,30 @@ int omp_get_max_threads(void) {
 }
 
 int omp_get_level(void) {
+#ifdef OMPTARGET_DEVICE_THUNDERBIRD
+  return tbirdLevel();
+#else
   int LevelVar = icv::Level;
   ASSERT(LevelVar >= 0, nullptr);
   return LevelVar;
+#endif
 }
 
-int omp_get_active_level(void) { return !!icv::ActiveLevel; }
+int omp_get_active_level(void) {
+#ifdef OMPTARGET_DEVICE_THUNDERBIRD
+  return tbirdLevel();
+#else
+  return !!icv::ActiveLevel;
+#endif
+}
 
-int omp_in_parallel(void) { return !!icv::ActiveLevel; }
+int omp_in_parallel(void) {
+#ifdef OMPTARGET_DEVICE_THUNDERBIRD
+  return tbirdLevel();
+#else
+  return !!icv::ActiveLevel;
+#endif
+}
 
 void omp_get_schedule(omp_sched_t *ScheduleKind, int *ChunkSize) {
   *ScheduleKind = static_cast<omp_sched_t>((int)icv::RunSched);
@@ -377,19 +416,35 @@ void omp_set_schedule(omp_sched_t ScheduleKind, int ChunkSize) {
 }
 
 int omp_get_ancestor_thread_num(int Level) {
+#ifdef OMPTARGET_DEVICE_THUNDERBIRD
+  return Level == tbirdLevel() ? (int)__tbird_get_thread_id() : 0;
+#else
   return returnValIfLevelIsActive(Level, mapping::getThreadIdInBlock(), 0);
+#endif
 }
 
 int omp_get_thread_num(void) {
+#ifdef OMPTARGET_DEVICE_THUNDERBIRD
+  return (int)__tbird_get_thread_id();
+#else
   return omp_get_ancestor_thread_num(omp_get_level());
+#endif
 }
 
 int omp_get_team_size(int Level) {
+#ifdef OMPTARGET_DEVICE_THUNDERBIRD
+  return Level == tbirdLevel() ? (int)__tbird_get_team_size() : 1;
+#else
   return returnValIfLevelIsActive(Level, state::getEffectivePTeamSize(), 1);
+#endif
 }
 
 int omp_get_num_threads(void) {
+#ifdef OMPTARGET_DEVICE_THUNDERBIRD
+  return (int)__tbird_get_team_size();
+#else
   return omp_get_level() != 1 ? 1 : state::getEffectivePTeamSize();
+#endif
 }
 
 int omp_get_thread_limit(void) { return mapping::getMaxTeamThreads(); }
