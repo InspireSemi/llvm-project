@@ -26,16 +26,25 @@ void *MemoryPool::allocate(size_t size) {
   // is fully reusable — this is how HPL's residual check reuses the
   // solve-phase matrix slab instead of allocating a second one.
   //
-  // Skip exclusive slabs while they have a live tenant: allowing small
-  // siblings onto a big-allocation slab keeps live_count > 0 after the
-  // big tenant leaves, so the watermark never resets and the slab can
-  // never be reclaimed (see HPL N=360 pre-fix: Matrix A + 9 small
-  // scalars on slab 1 → slab 1 never drained → 4-slab budget blowup).
-  // Once the lone tenant frees and live_count hits 0, the slab becomes
-  // eligible again for any allocation (big or small).
+  // Exclusive slabs are reserved for large one-shot tenants (ELF image,
+  // HPL matrix A) so those buffers stay reclaimable.  A small allocation
+  // (<= INITIAL_SLAB_SIZE) never lands in an exclusive slab — not even a
+  // drained one.  Two failure modes this prevents:
+  //   - live exclusive slab: a small sibling keeps live_count > 0 after
+  //     the big tenant leaves, so the watermark never resets and the slab
+  //     can never be reclaimed.
+  //   - drained exclusive slab: the most-recent-first scan would place a
+  //     small allocation into the just-freed big slab and re-pin it, so
+  //     the next large buffer cannot reuse it and must allocate a fresh
+  //     slab — blowing the page budget (HPL N=360: a 2880-byte alloc
+  //     re-pinned the drained 255-page matrix slab → 273+255 > 500 →
+  //     mandatory-offload SIGABRT).
+  // A large allocation (> INITIAL_SLAB_SIZE) may still reuse a *drained*
+  // exclusive slab; it only skips one with a live tenant.
+  bool is_small = (aligned <= INITIAL_SLAB_SIZE);
   for (size_t i = slabs.size(); i > 0; i--) {
     Slab &s = slabs[i - 1];
-    if (s.exclusive && s.live_count > 0)
+    if (s.exclusive && (is_small || s.live_count > 0))
       continue;
     if (s.watermark + aligned <= s.capacity) {
       void *ptr = (char *)s.base + s.watermark;
