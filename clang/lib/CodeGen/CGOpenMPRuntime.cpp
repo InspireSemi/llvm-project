@@ -6806,6 +6806,52 @@ public:
                  OpenMPMapClauseKind, ArrayRef<OpenMPMapModifierKind>,
                  bool /*IsImplicit*/, const ValueDecl *, const Expr *>;
   using MapDataArrayTy = SmallVector<MapData, 4>;
+ 
+  /// Helper function to extract C type enum from QualType.
+  static llvm::omp::OpenMPParamCType getCTypeForQualType(QualType Ty) {
+    Ty = Ty.getCanonicalType().getUnqualifiedType();
+    
+    if (Ty->isVoidType())
+      return llvm::omp::OpenMPParamCType::OMP_PARAM_CTYPE_VOID;
+    if (Ty->isPointerType() || Ty->isArrayType() || Ty->isReferenceType())
+      return llvm::omp::OpenMPParamCType::OMP_PARAM_CTYPE_POINTER;
+      
+    if (const auto *BT = Ty->getAs<BuiltinType>()) {
+      switch (BT->getKind()) {
+        case BuiltinType::Char_S:
+        case BuiltinType::SChar:
+          return llvm::omp::OpenMPParamCType::OMP_PARAM_CTYPE_INT8;
+        case BuiltinType::Char_U:
+        case BuiltinType::UChar:
+        case BuiltinType::Bool:
+          return llvm::omp::OpenMPParamCType::OMP_PARAM_CTYPE_UINT8;
+        case BuiltinType::Short:
+          return llvm::omp::OpenMPParamCType::OMP_PARAM_CTYPE_INT16;
+        case BuiltinType::UShort:
+          return llvm::omp::OpenMPParamCType::OMP_PARAM_CTYPE_UINT16;
+        case BuiltinType::Int:
+          return llvm::omp::OpenMPParamCType::OMP_PARAM_CTYPE_INT32;
+        case BuiltinType::UInt:
+          return llvm::omp::OpenMPParamCType::OMP_PARAM_CTYPE_UINT32;
+        case BuiltinType::Long:
+        case BuiltinType::LongLong:
+          return llvm::omp::OpenMPParamCType::OMP_PARAM_CTYPE_INT64;
+        case BuiltinType::ULong:
+        case BuiltinType::ULongLong:
+          return llvm::omp::OpenMPParamCType::OMP_PARAM_CTYPE_UINT64;
+        case BuiltinType::Float:
+          return llvm::omp::OpenMPParamCType::OMP_PARAM_CTYPE_FLOAT;
+        case BuiltinType::Double:
+        case BuiltinType::LongDouble:
+          return llvm::omp::OpenMPParamCType::OMP_PARAM_CTYPE_DOUBLE;
+        default:
+          break;
+      }
+    }
+    
+    // Fallback for struct/union/unknown types - treat as pointer
+    return llvm::omp::OpenMPParamCType::OMP_PARAM_CTYPE_POINTER;
+  }
 
   /// This structure contains combined information generated for mappable
   /// clauses, including base pointers, pointers, sizes, map types, user-defined
@@ -7607,6 +7653,8 @@ private:
             CombinedInfo.Sizes.push_back(CGF.Builder.CreateIntCast(
                 Size, CGF.Int64Ty, /*isSigned=*/true));
             CombinedInfo.Types.push_back(Flags);
+            CombinedInfo.CTypes.push_back(getCTypeForQualType(
+                MapDecl ? MapDecl->getType() : QualType()));
             CombinedInfo.Mappers.push_back(nullptr);
             CombinedInfo.NonContigInfo.Dims.push_back(IsNonContiguous ? DimSize
                                                                       : 1);
@@ -7624,6 +7672,8 @@ private:
           CombinedInfo.Sizes.push_back(
               CGF.Builder.CreateIntCast(Size, CGF.Int64Ty, /*isSigned=*/true));
           CombinedInfo.Types.push_back(Flags);
+          CombinedInfo.CTypes.push_back(getCTypeForQualType(
+              MapDecl ? MapDecl->getType() : QualType()));
           CombinedInfo.Mappers.push_back(nullptr);
           CombinedInfo.NonContigInfo.Dims.push_back(IsNonContiguous ? DimSize
                                                                     : 1);
@@ -7701,10 +7751,17 @@ private:
             }
           }
 
-          if (!IsMappingWholeStruct)
+          if (!IsMappingWholeStruct) {
             CombinedInfo.Types.push_back(Flags);
-          else
+            CombinedInfo.CTypes.push_back(getCTypeForQualType(
+                I->getAssociatedExpression() ? 
+                I->getAssociatedExpression()->getType() : QualType()));
+          } else {
             StructBaseCombinedInfo.Types.push_back(Flags);
+            StructBaseCombinedInfo.CTypes.push_back(getCTypeForQualType(
+                I->getAssociatedExpression() ? 
+                I->getAssociatedExpression()->getType() : QualType()));
+          }
         }
 
         // If we have encountered a member expression so far, keep track of the
@@ -8160,6 +8217,8 @@ private:
               llvm::Constant::getNullValue(CGF.Int64Ty));
           UseDeviceDataCombinedInfo.Types.push_back(
               OpenMPOffloadMappingFlags::OMP_MAP_RETURN_PARAM);
+          UseDeviceDataCombinedInfo.CTypes.push_back(getCTypeForQualType(
+              VD ? VD->getType() : QualType()));
           UseDeviceDataCombinedInfo.Mappers.push_back(nullptr);
         };
 
@@ -8560,6 +8619,11 @@ public:
         : !PartialStruct.PreliminaryMapData.BasePointers.empty()
             ? OpenMPOffloadMappingFlags::OMP_MAP_PTR_AND_OBJ
             : OpenMPOffloadMappingFlags::OMP_MAP_TARGET_PARAM);
+    // Add C type information - use struct/pointer type since this is a partial struct
+    QualType Ty = VD ? VD->getType() : QualType();
+    CombinedInfo.CTypes.push_back(Ty.isNull() ? 
+        llvm::omp::OpenMPParamCType::OMP_PARAM_CTYPE_POINTER :
+        getCTypeForQualType(Ty));
     // If any element has the present modifier, then make sure the runtime
     // doesn't attempt to allocate the struct.
     if (CurTypes.end() !=
@@ -8656,6 +8720,7 @@ public:
           OpenMPOffloadMappingFlags::OMP_MAP_LITERAL |
           OpenMPOffloadMappingFlags::OMP_MAP_MEMBER_OF |
           OpenMPOffloadMappingFlags::OMP_MAP_IMPLICIT);
+      CombinedInfo.CTypes.push_back(getCTypeForQualType(CGF.getContext().VoidPtrTy));
       CombinedInfo.Mappers.push_back(nullptr);
     }
     for (const LambdaCapture &LC : RD->captures()) {
@@ -8696,6 +8761,7 @@ public:
           OpenMPOffloadMappingFlags::OMP_MAP_LITERAL |
           OpenMPOffloadMappingFlags::OMP_MAP_MEMBER_OF |
           OpenMPOffloadMappingFlags::OMP_MAP_IMPLICIT);
+      CombinedInfo.CTypes.push_back(getCTypeForQualType(VD->getType()));
       CombinedInfo.Mappers.push_back(nullptr);
     }
   }
@@ -8769,6 +8835,17 @@ public:
           OpenMPOffloadMappingFlags::OMP_MAP_LITERAL |
           OpenMPOffloadMappingFlags::OMP_MAP_TARGET_PARAM);
       CurCaptureVarInfo.Mappers.push_back(nullptr);
+      // Thunderbird-fork extension: keep the CTypes parallel array
+      // in lockstep with the upstream BasePointers/Pointers/Sizes/
+      // Types/Mappers arrays. is_device_ptr passes the pointer by
+      // value as an opaque address, so VoidPtrTy is the right C-type
+      // (matching the Sizes entry above which sizes it as VoidPtrTy).
+      // Without this push the lockstep assertion in
+      // genMapInfoForCaptures(): "Inconsistent map information
+      // sizes!" trips for any target region capturing an
+      // is_device_ptr-marked pointer.
+      CurCaptureVarInfo.CTypes.push_back(
+          getCTypeForQualType(CGF.getContext().VoidPtrTy));
       return;
     }
 
@@ -9061,6 +9138,7 @@ public:
       // Default map type.
       CombinedInfo.Types.push_back(OpenMPOffloadMappingFlags::OMP_MAP_TO |
                                    OpenMPOffloadMappingFlags::OMP_MAP_FROM);
+      CombinedInfo.CTypes.push_back(getCTypeForQualType(RI.getType()));
     } else if (CI.capturesVariableByCopy()) {
       const VarDecl *VD = CI.getCapturedVar();
       CombinedInfo.Exprs.push_back(VD->getCanonicalDecl());
@@ -9073,12 +9151,14 @@ public:
         // not pointers.
         CombinedInfo.Types.push_back(
             OpenMPOffloadMappingFlags::OMP_MAP_LITERAL);
+        CombinedInfo.CTypes.push_back(getCTypeForQualType(RI.getType()));
         CombinedInfo.Sizes.push_back(CGF.Builder.CreateIntCast(
             CGF.getTypeSize(RI.getType()), CGF.Int64Ty, /*isSigned=*/true));
       } else {
         // Pointers are implicitly mapped with a zero size and no flags
         // (other than first map that is added for all implicit maps).
         CombinedInfo.Types.push_back(OpenMPOffloadMappingFlags::OMP_MAP_NONE);
+        CombinedInfo.CTypes.push_back(getCTypeForQualType(RI.getType()));
         CombinedInfo.Sizes.push_back(llvm::Constant::getNullValue(CGF.Int64Ty));
       }
       auto I = FirstPrivateDecls.find(VD);
@@ -9094,6 +9174,7 @@ public:
       // default the value doesn't have to be retrieved. For an aggregate
       // type, the default is 'tofrom'.
       CombinedInfo.Types.push_back(getMapModifiersForPrivateClauses(CI));
+      CombinedInfo.CTypes.push_back(getCTypeForQualType(PtrTy->getPointeeType()));
       const VarDecl *VD = CI.getCapturedVar();
       auto I = FirstPrivateDecls.find(VD);
       CombinedInfo.Exprs.push_back(VD->getCanonicalDecl());
@@ -9533,6 +9614,8 @@ static void genMapInfoForCaptures(
                               OpenMPOffloadMappingFlags::OMP_MAP_TARGET_PARAM |
                               OpenMPOffloadMappingFlags::OMP_MAP_IMPLICIT);
       CurInfo.Mappers.push_back(nullptr);
+      // Track C type for VLA metadata parameter (typically i64 for array dimensions)
+      CurInfo.CTypes.push_back(MappableExprsHandler::getCTypeForQualType(RI->getType()));
     } else {
       // If we have any information in the map clause, we use it, otherwise we
       // just do a default mapping.
@@ -9561,6 +9644,7 @@ static void genMapInfoForCaptures(
            CurInfo.BasePointers.size() == CurInfo.Sizes.size() &&
            CurInfo.BasePointers.size() == CurInfo.Types.size() &&
            CurInfo.BasePointers.size() == CurInfo.Mappers.size() &&
+           CurInfo.BasePointers.size() == CurInfo.CTypes.size() &&
            "Inconsistent map information sizes!");
 
     // We need to append the results of this capture to what we already have.
@@ -9632,6 +9716,7 @@ static void emitTargetCallKernelLaunch(
     llvm::PointerIntPair<const Expr *, 2, OpenMPDeviceClauseModifier> Device,
     llvm::Value *OutlinedFnID, CodeGenFunction::OMPTargetDataInfo &InputInfo,
     llvm::Value *&MapTypesArray, llvm::Value *&MapNamesArray,
+    llvm::Value *&CTypesArray,
     llvm::function_ref<llvm::Value *(CodeGenFunction &CGF,
                                      const OMPLoopDirective &D)>
         SizeEmitter,
@@ -9657,11 +9742,12 @@ static void emitTargetCallKernelLaunch(
       Address(Info.RTArgs.MappersArray, CGF.VoidPtrTy, CGM.getPointerAlign());
   MapTypesArray = Info.RTArgs.MapTypesArray;
   MapNamesArray = Info.RTArgs.MapNamesArray;
+  CTypesArray = Info.RTArgs.CTypesArray;
 
   auto &&ThenGen = [&OMPRuntime, OutlinedFn, &D, &CapturedVars,
                     RequiresOuterTask, &CS, OffloadingMandatory, Device,
                     OutlinedFnID, &InputInfo, &MapTypesArray, &MapNamesArray,
-                    SizeEmitter](CodeGenFunction &CGF, PrePostActionTy &) {
+                    &CTypesArray, SizeEmitter](CodeGenFunction &CGF, PrePostActionTy &) {
     bool IsReverseOffloading = Device.getInt() == OMPC_DEVICE_ancestor;
 
     if (IsReverseOffloading) {
@@ -9716,7 +9802,8 @@ static void emitTargetCallKernelLaunch(
 
     llvm::OpenMPIRBuilder::TargetDataRTArgs RTArgs(
         BasePointersArray, PointersArray, SizesArray, MapTypesArray,
-        nullptr /* MapTypesArrayEnd */, MappersArray, MapNamesArray);
+        nullptr /* MapTypesArrayEnd */, CTypesArray,
+        MappersArray, MapNamesArray);
 
     llvm::OpenMPIRBuilder::TargetKernelArgs Args(
         NumTargetItems, RTArgs, NumIterations, NumTeams, NumThreads,
@@ -9791,16 +9878,18 @@ void CGOpenMPRuntime::emitTargetCall(
   CodeGenFunction::OMPTargetDataInfo InputInfo;
   llvm::Value *MapTypesArray = nullptr;
   llvm::Value *MapNamesArray = nullptr;
+  llvm::Value *CTypesArray = nullptr;
 
   auto &&TargetThenGen = [this, OutlinedFn, &D, &CapturedVars,
                           RequiresOuterTask, &CS, OffloadingMandatory, Device,
                           OutlinedFnID, &InputInfo, &MapTypesArray,
-                          &MapNamesArray, SizeEmitter](CodeGenFunction &CGF,
+                          &MapNamesArray, &CTypesArray,
+                          SizeEmitter](CodeGenFunction &CGF,
                                                        PrePostActionTy &) {
     emitTargetCallKernelLaunch(this, OutlinedFn, D, CapturedVars,
                                RequiresOuterTask, CS, OffloadingMandatory,
                                Device, OutlinedFnID, InputInfo, MapTypesArray,
-                               MapNamesArray, SizeEmitter, CGF, CGM);
+                               MapNamesArray, CTypesArray, SizeEmitter, CGF, CGM);
   };
 
   auto &&TargetElseGen =
