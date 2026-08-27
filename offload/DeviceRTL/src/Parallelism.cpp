@@ -41,6 +41,42 @@
 #include "State.h"
 #include "Synchronization.h"
 
+#ifdef OMPTARGET_DEVICE_THUNDERBIRD
+#include <stdarg.h>
+#include <pthread.h>
+#include <sched.h>
+#include <sys/sysinfo.h>
+#include <stdint.h>
+
+// Thread-local state for Thunderbird
+// Must use global-dynamic TLS model for shared libraries loaded via dlopen().
+// The tls_model attribute is required because LLVM's TargetMachine::getTLSModel()
+// incorrectly chooses local-exec for static TLS variables even when building with
+// -shared, causing R_RISCV_TPREL_* relocations that are incompatible with shared
+// libraries. The attribute embeds the TLS model in the IR metadata, ensuring it
+// survives bitcode linking and overrides the backend's default selection logic.
+static __thread uint32_t tbird_thread_id __attribute__((tls_model("global-dynamic"))) = 0;
+static __thread uint32_t tbird_team_size __attribute__((tls_model("global-dynamic"))) = 1;
+
+extern "C" {
+  uint32_t __tbird_get_thread_id(void) { return tbird_thread_id; }
+  uint32_t __tbird_get_team_size(void) { return tbird_team_size; }
+}
+
+// Configuration-gated diagnostics for the Thunderbird parallelism/affinity path
+// (fork/thread lifecycle prints + the hart-placement probe). Compiled out by
+// default; define TBIRD_DEVICE_TRACE at DeviceRTL build time (e.g. add
+// -DTBIRD_DEVICE_TRACE to the offload-runtime recipe's DeviceRTL flags) to
+// include them. Default builds carry no prints or format strings — zero runtime
+// cost, and production kernels stay lean.
+#ifdef TBIRD_DEVICE_TRACE
+#define TBIRD_TRACE(...) printf(__VA_ARGS__)
+#else
+#define TBIRD_TRACE(...) ((void)0)
+#endif
+
+#endif
+
 using namespace ompx;
 
 namespace {
@@ -302,10 +338,223 @@ __kmpc_parallel_51(IdentTy *ident, int32_t, int32_t if_expr,
 
 uint16_t __kmpc_parallel_level(IdentTy *, uint32_t) { return omp_get_level(); }
 
+#ifndef OMPTARGET_DEVICE_THUNDERBIRD
+// GPU targets use generic thread numbering
 int32_t __kmpc_global_thread_num(IdentTy *) { return omp_get_thread_num(); }
+#endif
 
 void __kmpc_push_num_teams(IdentTy *loc, int32_t tid, int32_t num_teams,
                            int32_t thread_limit) {}
 
 void __kmpc_push_proc_bind(IdentTy *loc, uint32_t tid, int proc_bind) {}
+
+#ifdef OMPTARGET_DEVICE_THUNDERBIRD
+// Linux/pthread-based parallelism for CPU accelerators
+
+// --- Hart-affinity probe (temporary instrumentation, 2026-06-23) -------------
+// Per OpenMP team thread, report the hart it is currently running on and the
+// size of its CPU-affinity mask. This answers whether a forked team spreads
+// across harts or collapses onto the mailbox worker's single pinned vCPU:
+// allowed_cpus==1 for every thread means the team inherited the worker's
+// one-vCPU mask and is confined to one hart; allowed_cpus==N (and differing
+// cpu= values) means it is free to spread. Declared directly to avoid a
+// the glibc <sched.h> API (cpu_set_t / CPU_COUNT), which the device sysroot
+// provides with __USE_GNU enabled.
+
+namespace {
+constexpr uint32_t MaxThunderbirdThreads = 64;
+
+void tbird_hart_probe(const char *who, uint32_t tid) {
+#ifdef TBIRD_DEVICE_TRACE
+  cpu_set_t set;
+  CPU_ZERO(&set);
+  int allowed = -1;
+  if (sched_getaffinity(0, sizeof(set), &set) == 0)
+    allowed = CPU_COUNT(&set);
+  int cpu = sched_getcpu();
+  printf("[DeviceRTL:hartprobe] %s tid=%u cpu=%d allowed_cpus=%d\n", who, tid,
+         cpu, allowed);
+#else
+  (void)who;
+  (void)tid;
+#endif
+}
+
+// Layer-1 hart-spread fix (2026-06-23): build an affinity mask over all online
+// harts so a forked team can use the whole device, instead of inheriting the
+// mailbox worker's single pinned vCPU (which confines the entire team to one
+// hart). This must be set affirmatively: the device's default process affinity
+// is itself a single hart, so merely declining to pin is not enough. Uses
+// get_nprocs_conf() (configured CPU count) rather than sysconf/nproc, which are
+// affinity-limited and would under-report here. Online harts are 0..N-1.
+void tbird_build_online_mask(cpu_set_t *set) {
+  CPU_ZERO(set);
+  int n = get_nprocs_conf();
+  if (n < 1)
+    n = 1;
+  if (n > CPU_SETSIZE)
+    n = CPU_SETSIZE;
+  for (int i = 0; i < n; ++i)
+    CPU_SET(i, set);
+}
+
+struct ThreadPayload {
+  void *Microtask;
+  void **Args;
+  int64_t NArgs;
+  int32_t GlobalTid;
+  uint32_t TeamSize;
+};
+
+void *threadEntry(void *arg) {
+  auto *payload = static_cast<ThreadPayload *>(arg);
+  
+  // Set thread-local state
+  tbird_thread_id = static_cast<uint32_t>(payload->GlobalTid);
+  tbird_team_size = payload->TeamSize;
+  
+  TBIRD_TRACE("[DeviceRTL:threadEntry] Worker thread %u starting (team_size=%u)\n",
+         tbird_thread_id, tbird_team_size);
+  tbird_hart_probe("worker", tbird_thread_id);
+
+  // Invoke the microtask
+  int32_t gtid = payload->GlobalTid;
+  int32_t btid = 0;  // bound tid (unused in OpenMP)
+  
+  invokeMicrotask(gtid, btid, payload->Microtask, payload->Args, payload->NArgs);
+  
+  return nullptr;
+}
+
+} // namespace
+
+void __kmpc_push_num_threads(IdentTy *loc, int32_t global_tid,
+                             int32_t num_threads) {
+  // Store the number of threads to use in the next parallel region
+  if (num_threads > 0)
+    icv::NThreads = num_threads;
+}
+
+void __kmpc_fork_call(IdentTy *loc, int32_t argc, void *microtask, ...) {
+  // Extract variadic arguments
+  void *args[MaxThunderbirdThreads];
+  if (argc > static_cast<int32_t>(MaxThunderbirdThreads)) {
+    printf("__kmpc_fork_call: too many arguments (%d), max is %u\n",
+           argc, MaxThunderbirdThreads);
+    __builtin_trap();
+  }
+  
+  va_list ap;
+  va_start(ap, microtask);
+  for (int i = 0; i < argc; i++) {
+    args[i] = va_arg(ap, void *);
+  }
+  va_end(ap);
+  
+  // Determine number of threads
+  uint32_t requested = (icv::NThreads > 0) ? icv::NThreads : 1;
+  uint32_t num_threads = requested;
+  if (num_threads > MaxThunderbirdThreads)
+    num_threads = MaxThunderbirdThreads;
+  
+  TBIRD_TRACE("[DeviceRTL:fork_call] requested=%u, num_threads=%u\n", requested, num_threads);
+  
+  // Serial execution
+  if (num_threads == 1) {
+    tbird_team_size = 1;
+    tbird_thread_id = 0;
+    
+    TBIRD_TRACE("[DeviceRTL:fork_call] Serial execution: tid=%u, team_size=%u\n",
+           tbird_thread_id, tbird_team_size);
+    
+    int32_t gtid = 0, btid = 0;
+    invokeMicrotask(gtid, btid, microtask, args, argc);
+    
+    icv::NThreads = 0;
+    return;
+  }
+  
+  // Parallel execution with pthreads
+  tbird_team_size = num_threads;
+
+  TBIRD_TRACE("[DeviceRTL:fork_call] Parallel execution: team_size=%u\n", num_threads);
+
+  // Layer-1 hart-spread: create the team over all online harts rather than
+  // letting the workers inherit the mailbox worker's single-vCPU pin. Worker
+  // threads get the full mask via a pthread_attr; the master (this thread) is
+  // broadened for the region and restored after the join so the change stays
+  // scoped to the parallel region.
+  cpu_set_t full_mask;
+  tbird_build_online_mask(&full_mask);
+  pthread_attr_t spread_attr;
+  pthread_attr_init(&spread_attr);
+  pthread_attr_setaffinity_np(&spread_attr, sizeof(full_mask), &full_mask);
+  cpu_set_t master_orig;
+  bool master_saved =
+      (pthread_getaffinity_np(pthread_self(), sizeof(master_orig),
+                              &master_orig) == 0);
+  pthread_setaffinity_np(pthread_self(), sizeof(full_mask), &full_mask);
+
+  pthread_t threads[MaxThunderbirdThreads];
+  ThreadPayload payloads[MaxThunderbirdThreads];
+  bool created[MaxThunderbirdThreads] = {false};
+  
+  // Prepare payloads for all threads
+  for (uint32_t i = 0; i < num_threads; ++i) {
+    payloads[i].Microtask = microtask;
+    payloads[i].Args = args;
+    payloads[i].NArgs = argc;
+    payloads[i].GlobalTid = static_cast<int32_t>(i);
+    payloads[i].TeamSize = num_threads;
+  }
+  
+  // Launch worker threads (1..N-1)
+  for (uint32_t i = 1; i < num_threads; ++i) {
+    TBIRD_TRACE("[DeviceRTL:fork_call] Creating thread %u\n", i);
+    if (pthread_create(&threads[i], &spread_attr, threadEntry, &payloads[i]) == 0) {
+      created[i] = true;
+      TBIRD_TRACE("[DeviceRTL:fork_call] Thread %u created successfully\n", i);
+    } else {
+      TBIRD_TRACE("[DeviceRTL:fork_call] Thread %u creation FAILED\n", i);
+      // pthread_create failed - execute serially on master
+      tbird_thread_id = i;
+      int32_t gtid = static_cast<int32_t>(i);
+      int32_t btid = 0;
+      invokeMicrotask(gtid, btid, microtask, args, argc);
+    }
+  }
+  
+  // Master thread executes as thread 0
+  tbird_thread_id = 0;
+  TBIRD_TRACE("[DeviceRTL:fork_call] Master thread executing as tid=%u, team_size=%u\n",
+         tbird_thread_id, tbird_team_size);
+  tbird_hart_probe("master", tbird_thread_id);
+  int32_t gtid = 0, btid = 0;
+  invokeMicrotask(gtid, btid, microtask, args, argc);
+  
+  // Join worker threads
+  for (uint32_t i = 1; i < num_threads; ++i) {
+    if (created[i]) {
+      pthread_join(threads[i], nullptr);
+    }
+  }
+
+  // Restore the master/worker thread's original affinity (scope the broadening
+  // to this region) and release the spread attribute.
+  if (master_saved)
+    pthread_setaffinity_np(pthread_self(), sizeof(master_orig), &master_orig);
+  pthread_attr_destroy(&spread_attr);
+
+  // Reset state
+  icv::NThreads = 0;
+  tbird_team_size = 1;
+  tbird_thread_id = 0;
+}
+
+int32_t __kmpc_global_thread_num(IdentTy *) {
+  return static_cast<int32_t>(tbird_thread_id);
+}
+
+#endif // OMPTARGET_DEVICE_THUNDERBIRD
+
 }

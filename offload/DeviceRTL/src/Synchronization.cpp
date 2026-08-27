@@ -260,6 +260,110 @@ void setCriticalLock(omp_lock_t *Lock) { setLock(Lock); }
 #endif
 ///}
 
+/// Thunderbird (CPU-based) Implementation
+///
+///{
+#ifdef OMPTARGET_DEVICE_THUNDERBIRD
+
+// Thunderbird uses OpenMP for synchronization, no special atomics needed
+uint32_t atomicInc(uint32_t *Address, uint32_t Val, atomic::OrderingTy Ordering,
+                   atomic::MemScopeTy MemScope) {
+  return __atomic_fetch_add(Address, 1, __ATOMIC_SEQ_CST) % Val;
+}
+
+// Simple barrier using atomic counter
+// This is a basic sense-reversing barrier
+[[clang::loader_uninitialized]] Local<uint32_t> barrierCounter;
+[[clang::loader_uninitialized]] Local<uint32_t> barrierSense;
+
+void namedBarrierInit() {
+  barrierCounter = 0;
+  barrierSense = 0;
+}
+
+void namedBarrier() {
+  uint32_t NumThreads = omp_get_num_threads();
+  uint32_t localSense = __atomic_load_n(&barrierSense, __ATOMIC_ACQUIRE);
+  
+  uint32_t arrived = __atomic_add_fetch(&barrierCounter, 1, __ATOMIC_ACQ_REL);
+  
+  if (arrived == NumThreads) {
+    // Last thread to arrive - reset and flip sense
+    __atomic_store_n(&barrierCounter, 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&barrierSense, !localSense, __ATOMIC_RELEASE);
+  } else {
+    // Wait for sense to flip
+    while (__atomic_load_n(&barrierSense, __ATOMIC_ACQUIRE) == localSense) {
+      // Spin wait
+    }
+  }
+}
+
+void fenceTeam(atomic::OrderingTy Ordering) {
+  __atomic_thread_fence(__ATOMIC_SEQ_CST);
+}
+
+void fenceKernel(atomic::OrderingTy Ordering) {
+  __atomic_thread_fence(__ATOMIC_SEQ_CST);
+}
+
+void fenceSystem(atomic::OrderingTy Ordering) {
+  __atomic_thread_fence(__ATOMIC_SEQ_CST);
+}
+
+void syncWarp(__kmpc_impl_lanemask_t Mask) {
+  // No warp concept on CPU - this is a no-op
+}
+
+void syncThreads(atomic::OrderingTy Ordering) {
+  namedBarrier();
+}
+
+void syncThreadsAligned(atomic::OrderingTy Ordering) {
+  namedBarrier();
+}
+
+constexpr uint32_t UNSET = 0;
+constexpr uint32_t SET = 1;
+
+void initLock(omp_lock_t *Lock) {
+  __atomic_store_n((uint32_t *)Lock, UNSET, __ATOMIC_SEQ_CST);
+}
+
+void destroyLock(omp_lock_t *Lock) {
+  // No-op for simple atomic-based lock
+}
+
+void setLock(omp_lock_t *Lock) {
+  uint32_t expected = UNSET;
+  while (!__atomic_compare_exchange_n((uint32_t *)Lock, &expected, SET,
+                                      false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
+    expected = UNSET;
+    // Spin-wait
+  }
+}
+
+void unsetLock(omp_lock_t *Lock) {
+  __atomic_store_n((uint32_t *)Lock, UNSET, __ATOMIC_SEQ_CST);
+}
+
+int testLock(omp_lock_t *Lock) {
+  uint32_t expected = UNSET;
+  return __atomic_compare_exchange_n((uint32_t *)Lock, &expected, SET,
+                                     false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+}
+
+void unsetCriticalLock(omp_lock_t *Lock) {
+  unsetLock(Lock);
+}
+
+void setCriticalLock(omp_lock_t *Lock) {
+  setLock(Lock);
+}
+
+#endif
+///}
+
 } // namespace impl
 
 void synchronize::init(bool IsSPMD) {
