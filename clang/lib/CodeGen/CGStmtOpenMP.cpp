@@ -582,7 +582,13 @@ static llvm::Function *emitOutlinedFunctionPrologue(
   F->setDoesNotRecurse();
 
   // Always inline the outlined function if optimizations are enabled.
-  if (CGM.getCodeGenOpts().OptimizationLevel != 0) {
+  // For non-GPU device targets (e.g. Thunderbird/RISC-V pthread-based offload),
+  // skip alwaysinline: the outlined function runs on separate pthreads and must
+  // remain a callable function pointer passed to __kmpc_fork_call.  Inlining it
+  // makes the callback argument dead, which DAE then replaces with poison,
+  // introducing UB that folds the kernel entry into unreachable.
+  if (CGM.getCodeGenOpts().OptimizationLevel != 0 &&
+      CGM.getOpenMPRuntime().isGPU()) {
     F->removeFnAttr(llvm::Attribute::NoInline);
     F->addFnAttr(llvm::Attribute::AlwaysInline);
   }
