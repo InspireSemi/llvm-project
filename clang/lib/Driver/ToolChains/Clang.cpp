@@ -5574,6 +5574,21 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   unsigned PICLevel;
   bool IsPIE;
   std::tie(RelocationModel, PICLevel, IsPIE) = ParsePICArgs(TC, Args);
+  
+  // For RISC-V OpenMP device offloading specifically, disable PIE to avoid
+  // position-independent executables that cannot be loaded via dlopen.
+  // The device runtime loads these as shared objects, not standalone executables.
+  // This only affects device offload compilation, not regular cross-compilation
+  // where PIE may still be desired. GPU targets are unaffected.
+  if (IsOpenMPDevice && Triple.isRISCV()) {
+    IsPIE = false;
+    // Keep PIC for shared library compatibility, but disable PIE mode
+    // Use global-dynamic TLS model because device images are loaded via dlopen()
+    // at runtime (not at process startup). The default local-exec TLS model uses
+    // TPREL relocations that are incompatible with -shared libraries.
+    CmdArgs.push_back("-ftls-model=global-dynamic");
+  }
+  
   Arg *LastPICDataRelArg =
       Args.getLastArg(options::OPT_mno_pic_data_is_text_relative,
                       options::OPT_mpic_data_is_text_relative);
@@ -9176,6 +9191,17 @@ void LinkerWrapper::ConstructJob(Compilation &C, const JobAction &JA,
       if (Kind == Action::OFK_OpenMP && !Args.hasArg(OPT_no_offloadlib) &&
           (TC->getTriple().isAMDGPU() || TC->getTriple().isNVPTX()))
         LinkerArgs.emplace_back("-lompdevice");
+
+      // Thunderbird device ELFs are loaded via dlopen()/memfd which respects
+      // PT_LOAD segment permissions.  LLD's rosegment (enabled by default)
+      // splits R-- and R-X sections into separate segments; at -O2+ this
+      // puts .text in a non-executable segment, causing page faults.
+      // Disable rosegment so R-- and R-X sections share one R-X segment.
+      // (Same issue as Android API < 29 — see Linux.cpp)
+      if (Kind == Action::OFK_OpenMP &&
+          TC->getTriple().isRISCV() &&
+          TC->getTriple().getVendor() == llvm::Triple::Inspire)
+        LinkerArgs.emplace_back("--no-rosegment");
 
       // Forward all of these to the appropriate toolchain.
       for (StringRef Arg : CompilerArgs)
