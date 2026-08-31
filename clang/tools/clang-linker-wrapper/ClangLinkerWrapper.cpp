@@ -552,6 +552,16 @@ namespace riscv64{
   for (StringRef InputFile : InputFiles)
     CmdArgs.push_back(InputFile);
 
+  // The device image is a shared object loaded by the device server at run
+  // time, and its OpenMP runtime lives in libomp.so on the device image rather
+  // than being linked into the image itself. Link against libomp so the
+  // __kmpc_* references have declarations: -Wl,--no-undefined above then still
+  // rejects a genuinely missing symbol, while the runtime symbols resolve
+  // through DT_NEEDED at dlopen. Vendor-gated because a generic riscv64 OpenMP
+  // target has no such runtime on its device.
+  if (Triple.getVendor() == llvm::Triple::Inspire)
+    CmdArgs.push_back("-lomp");
+
   if (!Triple.isGPU()) {
     CmdArgs.push_back("-Wl,-Bsymbolic");
   }
