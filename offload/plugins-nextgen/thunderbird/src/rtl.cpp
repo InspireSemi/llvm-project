@@ -744,6 +744,19 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
 
 private:
   /// Grid values for Thunderbird plugins.
+  ///
+  /// NOT WIRED to launch behaviour, and not a statement about the hardware.
+  /// The generic plugin uses these to compute a host-side thread/block clamp
+  /// (PluginInterface.cpp: MaxNumThreads, getNumThreads, getNumBlocks), but
+  /// ThunderbirdKernelTy::launchImpl only traces the resulting NumThreads and
+  /// NumBlocks -- it never sends them to the device. The device gets its thread
+  /// count from the num_threads clause directly, via __kmpc_push_num_threads
+  /// into the resident libomp.
+  ///
+  /// So GV_Max_WG_Size = 1 does not mean "one thread per team"; nothing reads it
+  /// for that purpose. Before giving these real values, wire launchImpl to
+  /// forward the resolved count and decide where a thread ceiling belongs --
+  /// OpenMP 5.2 Sec 10.1.1 puts it in thread-limit-var, not in a plugin clamp.
   static constexpr GV ThunderbirdGridValues = {
       1, // GV_Slot_Size
       1, // GV_Warp_Size
@@ -838,11 +851,23 @@ Error ThunderbirdKernelTy::launchImpl(GenericDeviceTy &GenericDevice, uint32_t N
   auto *TBirdDevice = static_cast<ThunderbirdDeviceTy *>(&GenericDevice);
   DP("Using ctx=%p, image_buffer=%p\n", (void*)TBirdDevice->ctx, (void*)image_buffer);
 
-  // Detect execution mode
-  bool IsGeneric = (NumThreads[0] == 1 && NumThreads[1] == 1 && NumThreads[2] == 1);
-  DP("Execution mode: %s (threads=%u)\n",
-     IsGeneric ? "GENERIC" : "SPMD",
-     NumThreads[0] * NumThreads[1] * NumThreads[2]);
+  // Execution mode: Thunderbird is always GENERIC. It has no SPMD mode, because
+  // SPMD/generic is a GPU state-machine distinction that lives in the device
+  // runtime, and the resident runtime here is libomp, which has no such concept
+  // -- it defines none of __kmpc_target_init/_deinit, __kmpc_is_spmd_exec_mode,
+  // __kmpc_parallel_51, __kmpc_kernel_parallel or __kmpc_parallel_spmd. A kernel
+  // image is entered once and __kmpc_fork_call creates the team, which is the
+  // generic model by construction.
+  //
+  // This used to be derived from NumThreads[0] == 1, which held only because
+  // ThunderbirdGridValues sets GV_Max_WG_Size to 1. That made the device calling
+  // convention below (prependThreadId) depend on a constant that reads like a
+  // hardware limit, so raising it would have silently changed the kernel ABI.
+  // State the mode directly instead.
+  const bool IsGeneric = true;
+  DP("Execution mode: GENERIC (host-runtime threads=%u, blocks=%u)\n",
+     NumThreads[0] * NumThreads[1] * NumThreads[2],
+     NumBlocks[0] * NumBlocks[1] * NumBlocks[2]);
 
   // Debug: Print LaunchParams.Ptrs array
   if (LaunchParams.Ptrs) {
