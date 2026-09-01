@@ -559,8 +559,25 @@ namespace riscv64{
   // rejects a genuinely missing symbol, while the runtime symbols resolve
   // through DT_NEEDED at dlopen. Vendor-gated because a generic riscv64 OpenMP
   // target has no such runtime on its device.
-  if (Triple.getVendor() == llvm::Triple::Inspire)
+  if (Triple.getVendor() == llvm::Triple::Inspire) {
     CmdArgs.push_back("-lomp");
+
+    // Math and atomics. Device kernels routinely call into libm -- sqrt in the
+    // nrm2-style BLAS reductions, for one -- and, for accumulator types the
+    // target has no lock-free instruction for (16-byte complex on riscv64), the
+    // compiler emits the out-of-line libatomic helpers __atomic_load and
+    // __atomic_compare_exchange. Clang links neither implicitly for C, and a
+    // `#pragma omp target` region has no way to ask for them, so the toolchain
+    // has to supply them or the device link fails on symbols the user never
+    // referenced by name.
+    //
+    // --as-needed so an image that does not use them records no DT_NEEDED entry
+    // for them; symbol resolution against -Wl,--no-undefined is unaffected.
+    CmdArgs.push_back("-Wl,--as-needed");
+    CmdArgs.push_back("-lm");
+    CmdArgs.push_back("-latomic");
+    CmdArgs.push_back("-Wl,--no-as-needed");
+  }
 
   if (!Triple.isGPU()) {
     CmdArgs.push_back("-Wl,-Bsymbolic");
