@@ -12,14 +12,7 @@
 #ifndef OMPTARGET_TYPES_H
 #define OMPTARGET_TYPES_H
 
-#ifdef OMPTARGET_DEVICE_THUNDERBIRD
-// CPU-based accelerators don't need GPU intrinsics
-#include <cpuaccintrin.h>
-#else
-// GPU targets need GPU intrinsics and address spaces
 #include <gpuintrin.h>
-#endif
-
 #include <stddef.h>
 #include <stdint.h>
 

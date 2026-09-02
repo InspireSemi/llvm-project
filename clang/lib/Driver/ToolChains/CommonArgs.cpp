@@ -2899,18 +2899,9 @@ void tools::addOpenMPDeviceRTL(const Driver &D,
       : Triple.isNVPTX() ? options::OPT_libomptarget_nvptx_bc_path_EQ
                          : options::OPT_libomptarget_spirv_bc_path_EQ;
 
-  // Determine the library name based on the target architecture.
-  // For RISC-V, use the BitcodeSuffix (which contains the arch like "thunderbird").
-  StringRef ArchPrefix;
-  if (Triple.isAMDGCN())
-    ArchPrefix = "amdgpu";
-  else if (Triple.isNVPTX())
-    ArchPrefix = "nvptx";
-  else if (Triple.isRISCV())
-    ArchPrefix = BitcodeSuffix.empty() ? "riscv64" : BitcodeSuffix;
-  else
-    ArchPrefix = "spirv";
-  
+  StringRef ArchPrefix = Triple.isAMDGCN()  ? "amdgpu"
+                         : Triple.isNVPTX() ? "nvptx"
+                                            : "spirv";
   std::string LibOmpTargetName = ("libomptarget-" + ArchPrefix + ".bc").str();
 
   // First check whether user specifies bc library

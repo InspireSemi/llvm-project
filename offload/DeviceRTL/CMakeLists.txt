@@ -75,9 +75,9 @@ if(${LIBOMPTARGET_GPU_LIBC_SUPPORT})
   list(APPEND clang_opt_flags -DOMPTARGET_HAS_LIBC)
 endif()
 
-# Common flags for all targets
-set(bc_flags_common -c -flto -std=c++17 -fvisibility=hidden
-             ${clang_opt_flags} -nogpulib
+# Set flags for LLVM Bitcode compilation.
+set(bc_flags -c -flto -std=c++17 -fvisibility=hidden
+             ${clang_opt_flags} -nogpulib -nostdlibinc
              -fno-rtti -fno-exceptions -fconvergent-functions
              -Wno-unknown-cuda-version
              -DOMPTARGET_DEVICE_RUNTIME
@@ -86,37 +86,9 @@ set(bc_flags_common -c -flto -std=c++17 -fvisibility=hidden
              -I${devicertl_base_directory}/../../libc
 )
 
-# Build target-specific flags
-function(getDeviceRTLCompileFlags target_name out_var)
-  set(flags ${bc_flags_common})
-  
-  if(target_name STREQUAL "thunderbird")
-    # Thunderbird (Linux target): allow standard library, require sysroot
-    if(DEFINED LIBOMPTARGET_DEVICE_SYSROOT AND NOT "${LIBOMPTARGET_DEVICE_SYSROOT}" STREQUAL "")
-      list(APPEND flags --sysroot=${LIBOMPTARGET_DEVICE_SYSROOT})
-      message(STATUS "DeviceRTL: Thunderbird using sysroot with standard library: ${LIBOMPTARGET_DEVICE_SYSROOT}")
-    endif()
-    # Thunderbird device images are loaded via dlopen() at runtime, so TLS variables
-    # must use global-dynamic model instead of local-exec to generate relocations
-    # compatible with shared libraries (R_RISCV_TLSGD instead of R_RISCV_TPREL)
-    list(APPEND flags -ftls-model=global-dynamic)
-    # Disable PIE to ensure the module PIE level is not set, which would cause
-    # TargetMachine::getTLSModel() to incorrectly choose LocalExec TLS model
-    list(APPEND flags -fno-pie)
-  else()
-    # GPU targets: no standard library includes
-    list(APPEND flags -nostdlibinc)
-  endif()
-  
-  set(${out_var} ${flags} PARENT_SCOPE)
-endfunction()
-
 # first create an object target
 function(compileDeviceRTLLibrary target_name target_triple)
   set(target_bc_flags ${ARGN})
-  
-  # Get target-specific compile flags
-  getDeviceRTLCompileFlags(${target_name} bc_flags)
 
   foreach(src ${src_files})
     get_filename_component(infile ${src} ABSOLUTE)
@@ -163,16 +135,9 @@ function(compileDeviceRTLLibrary target_name target_triple)
   target_compile_options(libomptarget-${target_name} PRIVATE
     "--target=${target_triple}" "-fuse-ld=lld" "-march=" "-mcpu="
     "-Wno-unused-command-line-argument")
-  
-  # Build link options with optional sysroot
-  set(device_link_opts "--target=${target_triple}"
-                       "-r" "-nostdlib" "-flto" "-Wl,--lto-emit-llvm"
-                       "-fuse-ld=lld" "-march=" "-mcpu=")
-  if(DEFINED LIBOMPTARGET_DEVICE_SYSROOT AND NOT "${LIBOMPTARGET_DEVICE_SYSROOT}" STREQUAL "")
-    list(APPEND device_link_opts "--sysroot=${LIBOMPTARGET_DEVICE_SYSROOT}")
-  endif()
-  
-  target_link_options(libomptarget-${target_name} PRIVATE ${device_link_opts})
+  target_link_options(libomptarget-${target_name} PRIVATE "--target=${target_triple}"
+                      "-r" "-nostdlib" "-flto" "-Wl,--lto-emit-llvm"
+                      "-fuse-ld=lld" "-march=" "-mcpu=")
   install(TARGETS libomptarget-${target_name}
           PERMISSIONS OWNER_WRITE OWNER_READ GROUP_READ WORLD_READ
           DESTINATION "lib${LLVM_LIBDIR_SUFFIX}/${target_triple}")
@@ -200,16 +165,10 @@ function(compileDeviceRTLLibrary target_name target_triple)
   if (CMAKE_EXPORT_COMPILE_COMMANDS)
     set(ide_target_name omptarget-ide-${target_name})
     add_library(${ide_target_name} STATIC EXCLUDE_FROM_ALL ${src_files})
-    
-    # Use same flags as main build
-    set(ide_compile_opts -fvisibility=hidden --target=${target_triple} -nogpulib -Wno-unknown-cuda-version)
-    if(target_name STREQUAL "thunderbird" AND DEFINED LIBOMPTARGET_DEVICE_SYSROOT)
-      list(APPEND ide_compile_opts --sysroot=${LIBOMPTARGET_DEVICE_SYSROOT})
-    else()
-      list(APPEND ide_compile_opts -nostdlibinc)
-    endif()
-    
-    target_compile_options(${ide_target_name} PRIVATE ${ide_compile_opts})
+    target_compile_options(${ide_target_name} PRIVATE
+      -fvisibility=hidden --target=${target_triple}
+      -nogpulib -nostdlibinc -Wno-unknown-cuda-version
+    )
     target_compile_definitions(${ide_target_name} PRIVATE SHARED_SCRATCHPAD_SIZE=512)
     target_include_directories(${ide_target_name} PRIVATE
       ${include_directory}
@@ -226,16 +185,4 @@ endif()
 
 if(NOT LLVM_TARGETS_TO_BUILD OR "NVPTX" IN_LIST LLVM_TARGETS_TO_BUILD)
   compileDeviceRTLLibrary(nvptx nvptx64-nvidia-cuda --cuda-feature=+ptx63)
-endif()
-
-if(NOT LLVM_TARGETS_TO_BUILD OR "RISCV" IN_LIST LLVM_TARGETS_TO_BUILD)
-  # Thunderbird is a CPU-based RISC-V accelerator running Linux that uses
-  # traditional fork-join parallelism with pthreads rather than GPU SPMD model
-  if(DEFINED LIBOMPTARGET_DEVICE_SYSROOT AND NOT "${LIBOMPTARGET_DEVICE_SYSROOT}" STREQUAL "")
-    compileDeviceRTLLibrary(thunderbird riscv64-inspire-linux-gnu -DOMPTARGET_DEVICE_THUNDERBIRD)
-  else()
-    message(WARNING "Skipping Thunderbird DeviceRTL: LIBOMPTARGET_DEVICE_SYSROOT not set.\n"
-                    "Thunderbird requires a Linux sysroot with pthread support.\n"
-                    "Pass -DLIBOMPTARGET_DEVICE_SYSROOT=/path/to/riscv64-linux-sysroot to CMake.")
-  endif()
 endif()

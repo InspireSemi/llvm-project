@@ -27,16 +27,9 @@ using namespace ompx;
 
 // This variable should be visible to the plugin so we override the default
 // hidden visibility.
-#ifdef OMPTARGET_DEVICE_THUNDERBIRD
-// For Thunderbird (CPU-based), we need external linkage for weak symbols
-extern "C" [[gnu::used, gnu::retain, gnu::weak,
-  gnu::visibility(
-      "protected")]] Constant<DeviceEnvironmentTy> __omp_rtl_device_environment = {};
-#else
 [[gnu::used, gnu::retain, gnu::weak,
   gnu::visibility(
       "protected")]] Constant<DeviceEnvironmentTy> __omp_rtl_device_environment;
-#endif
 
 uint32_t config::getAssumeTeamsOversubscription() {
   return __omp_rtl_assume_teams_oversubscription;

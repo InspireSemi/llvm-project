@@ -14,11 +14,7 @@
 #include "Debug.h"
 #include "Interface.h"
 #include "Mapping.h"
-
-#ifndef OMPTARGET_DEVICE_THUNDERBIRD
-// GPU-specific intrinsics only needed for GPU targets
 #include "gpuintrin.h"
-#endif
 
 using namespace ompx;
 
