@@ -251,9 +251,6 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     }
     
     DP("SUCCESS: Thunderbird context initialized: ctx=%p\n", (void*)ctx);
-    DP("Setting MaxNumThreads=%d\n", THUNDERBIRD_MAX_THREADS);
-
-    MaxNumThreads = THUNDERBIRD_MAX_THREADS;
 
     pool.init(ctx);
     DP("Memory pool initialized\n");
@@ -746,17 +743,24 @@ private:
   /// Grid values for Thunderbird plugins.
   ///
   /// NOT WIRED to launch behaviour, and not a statement about the hardware.
-  /// The generic plugin uses these to compute a host-side thread/block clamp
-  /// (PluginInterface.cpp: MaxNumThreads, getNumThreads, getNumBlocks), but
-  /// ThunderbirdKernelTy::launchImpl only traces the resulting NumThreads and
-  /// NumBlocks -- it never sends them to the device. The device gets its thread
-  /// count from the num_threads clause directly, via __kmpc_push_num_threads
-  /// into the resident libomp.
+  /// The generic plugin feeds these into a host-side thread/block clamp
+  /// (PluginInterface.cpp: getNumThreads, getNumBlocks), whose result
+  /// ThunderbirdKernelTy::launchImpl does not use: there is no launch geometry
+  /// to configure. A kernel image is entered once as an ordinary function call
+  /// and the resident libomp creates the team from __kmpc_fork_call.
   ///
-  /// So GV_Max_WG_Size = 1 does not mean "one thread per team"; nothing reads it
-  /// for that purpose. Before giving these real values, wire launchImpl to
-  /// forward the resolved count and decide where a thread ceiling belongs --
-  /// OpenMP 5.2 Sec 10.1.1 puts it in thread-limit-var, not in a plugin clamp.
+  /// The thread ceiling does not live here either. launchImpl forwards the raw
+  /// KernelArgs.ThreadLimit[0] to the device, which applies it to
+  /// thread-limit-var via __kmpc_set_thread_limit -- the home OpenMP 5.2
+  /// Sec 10.1.1 gives it. It deliberately does not use the clamped NumThreads,
+  /// because getNumThreads inflates the clause by a warp for the generic-mode
+  /// primary thread.
+  ///
+  /// So GV_Max_WG_Size = 1 does not mean "one thread per team"; nothing reads
+  /// it for that purpose, and the plugin has no way to learn the device's hart
+  /// count -- there is no query for it in the tbird API. Giving these numbers
+  /// invented "real" values would make them look authoritative without making
+  /// them true.
   static constexpr GV ThunderbirdGridValues = {
       1, // GV_Slot_Size
       1, // GV_Warp_Size
@@ -767,8 +771,6 @@ private:
       1, // GV_Default_WG_Size
   };
 
-  /// Thunderbird write and read channels
-  uint32_t MaxNumThreads = 0;
 };
 
 /// Implementation of ThunderbirdKernelTy::initImpl (defined after ThunderbirdDeviceImageTy)
@@ -898,7 +900,7 @@ Error ThunderbirdKernelTy::launchImpl(GenericDeviceTy &GenericDevice, uint32_t N
 
   // Convert OpenMP arguments to tbird format
   tbird_arg_t Args[TBIRD_MAX_ARGS];
-  ArgConversionContext Ctx{TBirdDevice->pool, KernelArgs, LaunchParams, IsGeneric, KLEOffset};
+  ArgConversionContext Ctx{TBirdDevice->pool, KernelArgs, LaunchParams, KLEOffset};
 
   auto ArgCountOrErr = convertKernelArguments(Args, Ctx);
   if (!ArgCountOrErr)
@@ -930,22 +932,41 @@ Error ThunderbirdKernelTy::launchImpl(GenericDeviceTy &GenericDevice, uint32_t N
   // ImageSize is the full slab size; the device server parses ELF headers
   // starting at elf_offset to determine actual image bounds.
   size_t ImageSize = tbird_buffer_size(image_buffer);
-  DP("Calling tbird_launch_kernel_sync: elf_offset=%zu, image_size=%zu, num_args=%u\n",
-     kernel_elf_offset, ImageSize, ArgCount);
 
-  tbird_status_t Status = tbird_launch_kernel_sync(
+  // thread-limit-var for this kernel, taken from the RAW clause value rather
+  // than the clamped NumThreads[0] above. getNumThreads() adds a warp to the
+  // clause for the generic-mode primary thread (PluginInterface.cpp,
+  // `ThreadLimitClause[0] += getWarpSize()`), a GPU convention with no
+  // counterpart here -- routing thread_limit(4) through it would apply 5. It is
+  // private and cannot be overridden, so reading KernelArgs directly is the
+  // only way to get the value the user wrote.
+  //
+  // Clang stores 0 here when no thread_limit clause applies, and otherwise the
+  // clause value, or -- for a target region enclosing a single parallel -- that
+  // region's num_threads. OpenMP 5.2 (ICVs, target construct) requires
+  // thread-limit-var to be in [1, clause] when a clause is present, and permits
+  // any value > 0 when none is, so forwarding the field unconditionally is
+  // conforming in both cases. 0 means "leave the device runtime's default".
+  uint32_t ThreadLimit = KernelArgs.ThreadLimit[0];
+
+  DP("Calling tbird_launch_kernel_sync_ex: elf_offset=%zu, image_size=%zu, "
+     "num_args=%u, thread_limit=%u\n",
+     kernel_elf_offset, ImageSize, ArgCount, ThreadLimit);
+
+  tbird_status_t Status = tbird_launch_kernel_sync_ex(
       TBirdDevice->ctx,
       image_buffer,
       kernel_elf_offset,
       ImageSize,
       getName(),   // entry point symbol
       Args,
-      ArgCount
+      ArgCount,
+      ThreadLimit
   );
 
   if (Status != TBIRD_SUCCESS) {
     return Plugin::error(ErrorCode::UNKNOWN,
-                        "tbird_launch_kernel_sync failed: %s",
+                        "tbird_launch_kernel_sync_ex failed: %s",
                         tbird_last_error(TBirdDevice->ctx));
   }
 

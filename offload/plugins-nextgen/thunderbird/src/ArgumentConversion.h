@@ -41,7 +41,6 @@ struct ArgConversionContext {
   MemoryPool &Pool;
   KernelArgsTy &KernelArgs;
   KernelLaunchParamsTy &LaunchParams;
-  bool IsGenericMode;
   uint32_t KLEOffset; // KernelLaunchEnvironment offset in LaunchParams.Ptrs
 };
 

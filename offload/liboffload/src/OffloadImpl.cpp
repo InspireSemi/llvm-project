@@ -362,9 +362,13 @@ Error olGetDeviceInfoImplDetail(ol_device_handle_t Device,
     return Info.writeString(
         getInfoString({"CUDA Driver Version", "HSA Runtime Version", "Thunderbird Runtime Version"}));
   case OL_DEVICE_INFO_MAX_WORK_GROUP_SIZE:
+    // No Thunderbird entry: the plugin publishes no work-group size and has no
+    // way to learn one -- the tbird API exposes no hart count, and the device's
+    // team size is bounded by thread-limit-var at runtime, not by a device
+    // property. A name here with no producer in obtainInfoImpl only makes the
+    // query look answerable.
     return Info.write(getInfoXyz({"Workgroup Max Size per Dimension" /*AMD*/,
-                                  "Maximum Block Dimensions" /*CUDA*/,
-                                  "Maximum Threads" /*THUNDERBIRD*/}));
+                                  "Maximum Block Dimensions" /*CUDA*/}));
   default:
     return createOffloadError(ErrorCode::INVALID_ENUMERATION,
                               "getDeviceInfo enum '%i' is invalid", PropName);
