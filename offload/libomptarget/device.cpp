@@ -25,7 +25,6 @@
 #include "Shared/EnvironmentVar.h"
 #include "llvm/Support/Error.h"
 
-#include <iostream>
 #include <cassert>
 #include <climits>
 #include <cstdint>

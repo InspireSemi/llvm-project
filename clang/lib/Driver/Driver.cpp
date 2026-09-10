@@ -4975,8 +4975,7 @@ Action *Driver::BuildOffloadingActions(Compilation &C,
     // Get the product of all bound architectures and toolchains.
     SmallVector<std::pair<const ToolChain *, StringRef>> TCAndArchs;
     for (const ToolChain *TC : ToolChains) {
-      auto Archs = OffloadArchs.lookup(TC);
-      for (StringRef Arch : Archs) {
+      for (StringRef Arch : OffloadArchs.lookup(TC)) {
         TCAndArchs.push_back(std::make_pair(TC, Arch));
         DeviceActions.push_back(
             C.MakeAction<InputAction>(*InputArg, InputType, CUID));
