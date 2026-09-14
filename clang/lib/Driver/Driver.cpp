@@ -1100,15 +1100,7 @@ void Driver::CreateOffloadingDeviceToolChains(Compilation &C,
                ((!IsHIP && !IsCuda) || UseLLVMOffload)) {
       llvm::Triple AMDTriple("amdgcn-amd-amdhsa");
       llvm::Triple NVPTXTriple("nvptx64-nvidia-cuda");
-      // Thunderbird always uses Linux triple (never bare-metal).
-      // NOTE: Triple format matches Yocto sysroot: riscv64-inspire-linux-gnu (no 'unknown')
-      const bool HostIs64 = C.getDefaultToolChain().getTriple().isArch64Bit();
-      llvm::Triple ThunderbirdTriple(HostIs64
-                                       ? "riscv64-inspire-linux-gnu"
-                                       : "riscv32-inspire-linux-gnu");
 
-      bool HasAMDGPU = false;
-      bool HasNVPTX = false;
       bool HasThunderbird = false;
       for (StringRef Arch :
            C.getInputArgs().getAllArgValues(options::OPT_offload_arch_EQ)) {
@@ -1116,11 +1108,8 @@ void Driver::CreateOffloadingDeviceToolChains(Compilation &C,
             StringToOffloadArch(getProcessorFromTargetID(NVPTXTriple, Arch)));
         bool IsAMDGPU = IsAMDOffloadArch(
             StringToOffloadArch(getProcessorFromTargetID(AMDTriple, Arch)));
-        // RISC-V 'thunderbird' arch tag: accept exact match or future "thunderbird+..."
-        bool IsThunderbird = Arch.equals_insensitive("thunderbird") ||
-                           Arch.starts_with_insensitive("thunderbird");
-        HasAMDGPU |= IsAMDGPU;
-        HasNVPTX |= IsNVPTX;
+        // Accept "thunderbird" and any future "thunderbird+feature" spelling.
+        bool IsThunderbird = Arch.starts_with_insensitive("thunderbird");
         HasThunderbird |= IsThunderbird;
 
         if (!IsNVPTX && !IsAMDGPU && !IsThunderbird && !Arch.empty() &&
@@ -1131,23 +1120,21 @@ void Driver::CreateOffloadingDeviceToolChains(Compilation &C,
       }
 
       // Attempt to deduce the offloading triple from the set of architectures.
-      if (HasAMDGPU || HasNVPTX) {
-        for (const llvm::Triple &TT : {AMDTriple, NVPTXTriple}) {
-          auto &TC = getOffloadToolChain(C.getInputArgs(), Action::OFK_OpenMP, TT,
-                                        C.getDefaultToolChain().getTriple());
+      // We can only correctly deduce NVPTX / AMDGPU triples currently.
+      for (const llvm::Triple &TT : {AMDTriple, NVPTXTriple}) {
+        auto &TC = getOffloadToolChain(C.getInputArgs(), Action::OFK_OpenMP, TT,
+                                       C.getDefaultToolChain().getTriple());
 
-          llvm::SmallVector<StringRef> Archs =
-              getOffloadArchs(C, C.getArgs(), Action::OFK_OpenMP, &TC,
-                              /*SpecificToolchain=*/false);
-          if (!Archs.empty()) {
-            C.addOffloadDeviceToolChain(&TC, Action::OFK_OpenMP);
-            OffloadArchs[&TC] = Archs;
-          }
+        llvm::SmallVector<StringRef> Archs =
+            getOffloadArchs(C, C.getArgs(), Action::OFK_OpenMP, &TC,
+                            /*SpecificToolchain=*/false);
+        if (!Archs.empty()) {
+          C.addOffloadDeviceToolChain(&TC, Action::OFK_OpenMP);
+          OffloadArchs[&TC] = Archs;
         }
       }
 
-            if (HasThunderbird) {
-        // Call the helper function to get the correct triple.
+      if (HasThunderbird) {
         const llvm::Triple ThunderbirdTriple =
             getThunderbirdTriple(C.getDefaultToolChain().getTriple());
 
@@ -1155,8 +1142,9 @@ void Driver::CreateOffloadingDeviceToolChains(Compilation &C,
                                          ThunderbirdTriple,
                                          C.getDefaultToolChain().getTriple());
         C.addOffloadDeviceToolChain(&TBTC, Action::OFK_OpenMP);
-        OffloadArchs[&TBTC] = getOffloadArchs(C, C.getArgs(), Action::OFK_OpenMP, &TBTC,
-                                              /*SpecificToolchain=*/true);
+        OffloadArchs[&TBTC] =
+            getOffloadArchs(C, C.getArgs(), Action::OFK_OpenMP, &TBTC,
+                            /*SpecificToolchain=*/true);
       }
       // If the set is empty then we failed to find a native architecture.
       auto TCRange = C.getOffloadToolChains(Action::OFK_OpenMP);
