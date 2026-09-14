@@ -579,9 +579,7 @@ namespace riscv64{
     CmdArgs.push_back("-Wl,--no-as-needed");
   }
 
-  if (!Triple.isGPU()) {
-    CmdArgs.push_back("-Wl,-Bsymbolic");
-  }
+  CmdArgs.push_back("-Wl,-Bsymbolic");
 
   if (SaveTemps && linkerSupportsLTO(Args))
     CmdArgs.push_back("-Wl,--save-temps");
@@ -735,7 +733,14 @@ Expected<StringRef> linkDevice(ArrayRef<StringRef> InputFiles,
   case Triple::loongarch64:
     return generic::clang(InputFiles, Args, ActiveOffloadKindMask);
   case Triple::riscv64:
-    return riscv64::link(InputFiles, Args, ActiveOffloadKindMask);
+    // riscv64::link builds an Inspire device image: -nostartfiles -shared
+    // -fPIC -fno-pie, a mandatory --device-sysroot, and Inspire-only runtime
+    // libraries. A generic riscv64 offload target wants none of that, and at
+    // base reached the unsupported-arch error below, so leave it there.
+    if (Triple.getVendor() == Triple::Inspire)
+      return riscv64::link(InputFiles, Args, ActiveOffloadKindMask);
+    return createStringError(Triple.getArchName() +
+                             " linking is not supported");
   default:
     return createStringError(Triple.getArchName() +
                              " linking is not supported");

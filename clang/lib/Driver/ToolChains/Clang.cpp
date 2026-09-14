@@ -5580,7 +5580,8 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   // The device runtime loads these as shared objects, not standalone executables.
   // This only affects device offload compilation, not regular cross-compilation
   // where PIE may still be desired. GPU targets are unaffected.
-  if (IsOpenMPDevice && Triple.isRISCV()) {
+  if (IsOpenMPDevice && Triple.isRISCV() &&
+      Triple.getVendor() == llvm::Triple::Inspire) {
     IsPIE = false;
     // Keep PIC for shared library compatibility, but disable PIE mode
     // Use global-dynamic TLS model because device images are loaded via dlopen()

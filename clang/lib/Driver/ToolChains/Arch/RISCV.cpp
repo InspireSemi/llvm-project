@@ -74,7 +74,8 @@ void riscv::getRISCVTargetFeatures(const Driver &D, const llvm::Triple &Triple,
   // override MArch with our specific architecture string.
   std::string MArch = getRISCVArch(Args, Triple);
 
-  if (Args.hasArg(options::OPT_fopenmp) &&
+  if (Triple.getVendor() == llvm::Triple::Inspire &&
+      Args.hasArg(options::OPT_fopenmp) &&
       Args.hasArg(options::OPT_offload_arch_EQ)) {
     auto Archs = Args.getAllArgValues(options::OPT_offload_arch_EQ);
     if (llvm::is_contained(Archs, "thunderbird")) {
