@@ -587,8 +587,12 @@ static llvm::Function *emitOutlinedFunctionPrologue(
   // remain a callable function pointer passed to __kmpc_fork_call.  Inlining it
   // makes the callback argument dead, which DAE then replaces with poison,
   // introducing UB that folds the kernel entry into unreachable.
+  // Gated on the Thunderbird device compile alone. isGPU() is false for an
+  // ordinary host compile too, so testing it here stripped alwaysinline from
+  // every outlined function for every -fopenmp user, offload or not.
   if (CGM.getCodeGenOpts().OptimizationLevel != 0 &&
-      CGM.getOpenMPRuntime().isGPU()) {
+      !(CGM.getLangOpts().OpenMPIsTargetDevice &&
+        CGM.getTriple().getVendor() == llvm::Triple::Inspire)) {
     F->removeFnAttr(llvm::Attribute::NoInline);
     F->addFnAttr(llvm::Attribute::AlwaysInline);
   }

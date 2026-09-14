@@ -9657,10 +9657,14 @@ void OpenMPIRBuilder::createOffloadEntry(Constant *ID, Constant *Addr,
     //      called from outside the module.  Without this, IPSCCP sees no direct
     //      call sites (the function is only referenced by address in the offload
     //      entry struct) and marks the entry block unreachable, wiping the body.
-    if (Function *Fn = dyn_cast<Function>(Addr)) {
-      Fn->addFnAttr("kernel");
-      Fn->setLinkage(GlobalValue::ExternalLinkage);
-    }
+    // Thunderbird only. !isGPU() also covers upstream's own host/GenELF64
+    // offload target, where marking every offload entry as a kernel and forcing
+    // external linkage changes codegen for a target that never asked for it.
+    if (T.getVendor() == Triple::Inspire)
+      if (Function *Fn = dyn_cast<Function>(Addr)) {
+        Fn->addFnAttr("kernel");
+        Fn->setLinkage(GlobalValue::ExternalLinkage);
+      }
     llvm::offloading::emitOffloadingEntry(
         M, object::OffloadKind::OFK_OpenMP, ID,
         Name.empty() ? Addr->getName() : Name, Size, Flags, /*Data=*/0);
