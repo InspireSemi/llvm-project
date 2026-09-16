@@ -14,6 +14,7 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdlib>
+#include <cstring>
 #include <ffi.h>
 #include <glob.h>
 #include <string>
@@ -150,6 +151,14 @@ private:
   /// The kernel function to execute.
   void (*Func)(void);
   
+  /// Kernel-argument C types, read from this kernel's offload entry at init.
+  ///
+  /// The compiler attaches the array to EntryTy::AuxAddr rather than to the
+  /// kernel-arguments struct, which the AMDGPU, CUDA and host plugins also
+  /// read. Null when compiled against a toolchain that does not attach it, in
+  /// which case the launch path falls back to KernelArgs.ArgCTypes.
+  const uint8_t *CTypes = nullptr;
+
   /// Image buffer handle containing this kernel's ELF image (Phase 4)
   tbird_buffer_t image_buffer = nullptr;
   /// Offset of ELF image within pool slab
@@ -792,6 +801,22 @@ Error ThunderbirdKernelTy::initImpl(GenericDeviceTy &Device, DeviceImageTy &Imag
 
   DP("Stored image_buffer=%p, elf_offset=%zu for kernel %s\n",
      (void*)image_buffer, kernel_elf_offset, getName());
+
+  // Find this kernel's own offload entry and take the C-type array off it.
+  // These are host entries -- Entry.Address is a host pointer -- so the array
+  // is in the host module alongside them. Done once here rather than per
+  // launch: the types describe the kernel and never vary between calls.
+  if (const __tgt_device_image *TgtImage = Image.getTgtImage()) {
+    for (const llvm::offloading::EntryTy *E = TgtImage->EntriesBegin;
+         E != TgtImage->EntriesEnd; ++E) {
+      if (E->SymbolName && std::strcmp(E->SymbolName, getName()) == 0) {
+        CTypes = reinterpret_cast<const uint8_t *>(E->AuxAddr);
+        break;
+      }
+    }
+  }
+  DP("Kernel %s: C types %s the offload entry\n", getName(),
+     CTypes ? "taken from" : "NOT present on");
  
   // Functions have zero size.
   GlobalTy Global(getName(), 0);
@@ -900,7 +925,7 @@ Error ThunderbirdKernelTy::launchImpl(GenericDeviceTy &GenericDevice, uint32_t N
 
   // Convert OpenMP arguments to tbird format
   tbird_arg_t Args[TBIRD_MAX_ARGS];
-  ArgConversionContext Ctx{TBirdDevice->pool, KernelArgs, LaunchParams, KLEOffset};
+  ArgConversionContext Ctx{TBirdDevice->pool, KernelArgs, LaunchParams, KLEOffset, CTypes};
 
   auto ArgCountOrErr = convertKernelArguments(Args, Ctx);
   if (!ArgCountOrErr)

@@ -246,7 +246,11 @@ Expected<uint32_t> convertKernelArguments(tbird_arg_t ArgsOut[TBIRD_MAX_ARGS],
   // Iterate over the ORIGINAL argument count (metadata array bounds)
   for (uint32_t i = 0; i < OrigNumArgs; i++) {
     // Get type from ArgCTypes (indexed by original arg index)
-    uint8_t OmpCType = Ctx.KernelArgs.ArgCTypes ? Ctx.KernelArgs.ArgCTypes[i] : 11;
+    // Prefer the entry-supplied array; fall back while the kernel-arguments
+    // field still exists, so this commit is bisectable against the next.
+    const uint8_t *CTypes =
+        Ctx.CTypes ? Ctx.CTypes : Ctx.KernelArgs.ArgCTypes;
+    uint8_t OmpCType = CTypes ? CTypes[i] : 11;
     tbird_arg_type_t TbirdType = convert_omp_ctype_to_tbird(OmpCType);
 
     // Skip VOID arguments (padding/internal use)

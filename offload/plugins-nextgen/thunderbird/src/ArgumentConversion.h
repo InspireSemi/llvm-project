@@ -42,6 +42,8 @@ struct ArgConversionContext {
   KernelArgsTy &KernelArgs;
   KernelLaunchParamsTy &LaunchParams;
   uint32_t KLEOffset; // KernelLaunchEnvironment offset in LaunchParams.Ptrs
+  /// C types from the kernel's offload entry; null falls back to KernelArgs.
+  const uint8_t *CTypes;
 };
 
 /// Get OpenMP map type flags for argument (with safe bounds checking).
