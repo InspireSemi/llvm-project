@@ -2235,6 +2235,19 @@ public:
       RegionCTypes[ID] = CTypes;
   }
 
+  /// Whether to emit the kernel-argument C-type array at all.
+  ///
+  /// Only Thunderbird consumes it -- it dispatches through libffi and needs
+  /// each parameter's type at run time. Emitting it unconditionally is not
+  /// free for everyone else even though nothing reads it: creating the global
+  /// consumes a name suffix, so every later `.offload_sizes` / `.offload_maptypes`
+  /// in the module is renumbered, which is a visible codegen change for every
+  /// other offload target.
+  bool EmitKernelArgCTypes = false;
+
+  /// Set by the frontend when an offload target is an Inspire device.
+  void setEmitKernelArgCTypes(bool Emit) { EmitKernelArgCTypes = Emit; }
+
   /// Create the global variable holding the offload C types information.
   LLVM_ABI GlobalVariable *
   createOffloadCtypes(SmallVectorImpl<uint8_t> &CTypes,
@@ -2301,12 +2314,12 @@ public:
     explicit TargetDataRTArgs() {}
     explicit TargetDataRTArgs(Value *BasePointersArray, Value *PointersArray,
                               Value *SizesArray, Value *MapTypesArray,
-                              Value *MapTypesArrayEnd, Value *CTypesArray,
-                              Value *MappersArray, Value *MapNamesArray)
+                              Value *MapTypesArrayEnd, Value *MappersArray,
+                              Value *MapNamesArray)
         : BasePointersArray(BasePointersArray), PointersArray(PointersArray),
           SizesArray(SizesArray), MapTypesArray(MapTypesArray),
-          MapTypesArrayEnd(MapTypesArrayEnd), CTypesArray(CTypesArray),
-          MappersArray(MappersArray), MapNamesArray(MapNamesArray) {}
+          MapTypesArrayEnd(MapTypesArrayEnd), MappersArray(MappersArray),
+          MapNamesArray(MapNamesArray) {}
   };
 
   /// Container to pass the default attributes with which a kernel must be

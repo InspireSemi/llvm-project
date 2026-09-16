@@ -233,7 +233,7 @@ Error convertScalarArgument(uint32_t OmpIdx, tbird_arg_t &OutArg,
 Expected<uint32_t> convertKernelArguments(tbird_arg_t ArgsOut[TBIRD_MAX_ARGS],
                                           const ArgConversionContext &Ctx) {
   // KernelArgs.NumArgs was incremented by KLEOffset in prepareArgs(), but
-  // the metadata arrays (ArgCTypes, ArgTypes, ArgPtrs) were NOT extended.
+  // the metadata arrays (ctypes, ArgTypes, ArgPtrs) were NOT extended.
   // Use KLEOffset from context to get the original argument count.
   uint32_t OrigNumArgs = Ctx.KernelArgs.NumArgs - Ctx.KLEOffset;
   DP("Converting %u arguments from OpenMP format to tbird_arg_t[] "
@@ -245,12 +245,9 @@ Expected<uint32_t> convertKernelArguments(tbird_arg_t ArgsOut[TBIRD_MAX_ARGS],
 
   // Iterate over the ORIGINAL argument count (metadata array bounds)
   for (uint32_t i = 0; i < OrigNumArgs; i++) {
-    // Get type from ArgCTypes (indexed by original arg index)
-    // Prefer the entry-supplied array; fall back while the kernel-arguments
-    // field still exists, so this commit is bisectable against the next.
-    const uint8_t *CTypes =
-        Ctx.CTypes ? Ctx.CTypes : Ctx.KernelArgs.ArgCTypes;
-    uint8_t OmpCType = CTypes ? CTypes[i] : 11;
+    // Type for this argument, from the kernel's offload entry, indexed by
+    // original argument index.
+    uint8_t OmpCType = Ctx.CTypes ? Ctx.CTypes[i] : 11;
     tbird_arg_type_t TbirdType = convert_omp_ctype_to_tbird(OmpCType);
 
     // Skip VOID arguments (padding/internal use)

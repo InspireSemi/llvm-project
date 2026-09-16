@@ -529,7 +529,6 @@ void OpenMPIRBuilder::getKernelArgsVector(TargetKernelArgs &KernelArgs,
                 KernelArgs.RTArgs.PointersArray,
                 KernelArgs.RTArgs.SizesArray,
                 KernelArgs.RTArgs.MapTypesArray,
-                KernelArgs.RTArgs.CTypesArray,
                 KernelArgs.RTArgs.MapNamesArray,
                 KernelArgs.RTArgs.MappersArray,
                 KernelArgs.NumIterations,
@@ -8149,10 +8148,12 @@ void OpenMPIRBuilder::emitOffloadingArraysArgument(IRBuilderBase &Builder,
       /*Idx1=*/0);
   
   // Create GEP for C types array (using Int8 type for uint8_t).
-  auto Int8Ty = Type::getInt8Ty(M.getContext());
-  RTArgs.CTypesArray = Builder.CreateConstInBoundsGEP2_32(
-      ArrayType::get(Int8Ty, Info.NumberOfPtrs), Info.RTArgs.CTypesArray,
-      /*Idx0=*/0, /*Idx1=*/0);
+  if (EmitKernelArgCTypes && Info.RTArgs.CTypesArray) {
+    auto Int8Ty = Type::getInt8Ty(M.getContext());
+    RTArgs.CTypesArray = Builder.CreateConstInBoundsGEP2_32(
+        ArrayType::get(Int8Ty, Info.NumberOfPtrs), Info.RTArgs.CTypesArray,
+        /*Idx0=*/0, /*Idx1=*/0);
+  }
 
   // Only emit the mapper information arrays if debug information is
   // requested.
@@ -8630,13 +8631,16 @@ Error OpenMPIRBuilder::emitOffloadingArrays(
   auto *MapTypesArrayGbl = createOffloadMaptypes(Mapping, MaptypesName);
   Info.RTArgs.MapTypesArray = MapTypesArrayGbl;
 
-  // Create the C types array - always constant like map types.
-  SmallVector<uint8_t, 4> CTypesVec;
-  for (auto ctype : CombinedInfo.CTypes)
-    CTypesVec.push_back(static_cast<uint8_t>(ctype));
-  std::string CtypesName = createPlatformSpecificName({"offload_ctypes"});
-  auto *CTypesArrayGbl = createOffloadCtypes(CTypesVec, CtypesName);
-  Info.RTArgs.CTypesArray = CTypesArrayGbl;
+  // Create the C types array - always constant like map types. Emitted only
+  // for targets that consume it; see EmitKernelArgCTypes.
+  if (EmitKernelArgCTypes) {
+    SmallVector<uint8_t, 4> CTypesVec;
+    for (auto ctype : CombinedInfo.CTypes)
+      CTypesVec.push_back(static_cast<uint8_t>(ctype));
+    std::string CtypesName = createPlatformSpecificName({"offload_ctypes"});
+    auto *CTypesArrayGbl = createOffloadCtypes(CTypesVec, CtypesName);
+    Info.RTArgs.CTypesArray = CTypesArrayGbl;
+  }
 
   // The information types are only built if provided.
   if (!CombinedInfo.Names.empty()) {

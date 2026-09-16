@@ -1042,6 +1042,15 @@ CGOpenMPRuntime::CGOpenMPRuntime(CodeGenModule &CGM)
                                          ? CGM.getLangOpts().OMPHostIRFile
                                          : StringRef{});
   OMPBuilder.setConfig(Config);
+  // Only Thunderbird reads the kernel-argument C-type array; emitting it for
+  // anyone else renumbers their offload globals. Covers the host compile via
+  // the offload triples and the device compile via the module triple.
+  OMPBuilder.setEmitKernelArgCTypes(
+      CGM.getTriple().getVendor() == llvm::Triple::Inspire ||
+      llvm::any_of(CGM.getLangOpts().OMPTargetTriples,
+                   [](const llvm::Triple &TT) {
+                     return TT.getVendor() == llvm::Triple::Inspire;
+                   }));
 
   // The user forces the compiler to behave as if omp requires
   // unified_shared_memory was given.
@@ -9815,8 +9824,7 @@ static void emitTargetCallKernelLaunch(
 
     llvm::OpenMPIRBuilder::TargetDataRTArgs RTArgs(
         BasePointersArray, PointersArray, SizesArray, MapTypesArray,
-        nullptr /* MapTypesArrayEnd */, CTypesArray,
-        MappersArray, MapNamesArray);
+        nullptr /* MapTypesArrayEnd */, MappersArray, MapNamesArray);
 
     llvm::OpenMPIRBuilder::TargetKernelArgs Args(
         NumTargetItems, RTArgs, NumIterations, NumTeams, NumThreads,

@@ -155,8 +155,7 @@ private:
   ///
   /// The compiler attaches the array to EntryTy::AuxAddr rather than to the
   /// kernel-arguments struct, which the AMDGPU, CUDA and host plugins also
-  /// read. Null when compiled against a toolchain that does not attach it, in
-  /// which case the launch path falls back to KernelArgs.ArgCTypes.
+  /// read. Null when compiled against a toolchain that does not attach it.
   const uint8_t *CTypes = nullptr;
 
   /// Image buffer handle containing this kernel's ELF image (Phase 4)
@@ -913,7 +912,7 @@ Error ThunderbirdKernelTy::launchImpl(GenericDeviceTy &GenericDevice, uint32_t N
 
   // Detect KLE offset: prepareArgs() may have inserted a KernelLaunchEnvironment
   // pointer at LaunchParams.Ptrs[0] and incremented KernelArgs.NumArgs, but the
-  // metadata arrays (ArgCTypes, ArgTypes, ArgPtrs) were not extended.
+  // metadata arrays (ctypes, ArgTypes, ArgPtrs) were not extended.
   uint32_t KLEOffset = 0;
   if (LaunchParams.Ptrs) {
     void *FirstVal = *(void**)LaunchParams.Ptrs[0];
