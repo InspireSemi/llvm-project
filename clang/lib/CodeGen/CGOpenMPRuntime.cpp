@@ -9744,6 +9744,19 @@ static void emitTargetCallKernelLaunch(
   MapNamesArray = Info.RTArgs.MapNamesArray;
   CTypesArray = Info.RTArgs.CTypesArray;
 
+  // Hand the C-type array to this region's offload entry, so the Thunderbird
+  // plugin can read it from EntryTy::AuxAddr at image registration instead of
+  // from the kernel-arguments struct, which the AMDGPU, CUDA and host plugins
+  // also read. Gated here rather than in the OMPIRBuilder because the entry is
+  // emitted into the host module, whose triple is the host's, not the device's.
+  if (llvm::any_of(CGM.getLangOpts().OMPTargetTriples,
+                   [](const llvm::Triple &TT) {
+                     return TT.getVendor() == llvm::Triple::Inspire;
+                   }))
+    if (auto *CTypesGbl = dyn_cast_or_null<llvm::Constant>(CTypesArray))
+      if (auto *RegionID = dyn_cast_or_null<llvm::Constant>(OutlinedFnID))
+        OMPRuntime->getOMPBuilder().setRegionCTypes(RegionID, CTypesGbl);
+
   auto &&ThenGen = [&OMPRuntime, OutlinedFn, &D, &CapturedVars,
                     RequiresOuterTask, &CS, OffloadingMandatory, Device,
                     OutlinedFnID, &InputInfo, &MapTypesArray, &MapNamesArray,

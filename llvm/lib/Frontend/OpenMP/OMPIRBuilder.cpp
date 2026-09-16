@@ -9665,9 +9665,14 @@ void OpenMPIRBuilder::createOffloadEntry(Constant *ID, Constant *Addr,
         Fn->addFnAttr("kernel");
         Fn->setLinkage(GlobalValue::ExternalLinkage);
       }
+    // Carry the kernel-argument C types on the entry when the frontend
+    // recorded them. Empty for every target that does not need them, so no
+    // vendor test is required here -- and one would be wrong anyway, since
+    // this entry is emitted into the x86-64 host module.
     llvm::offloading::emitOffloadingEntry(
         M, object::OffloadKind::OFK_OpenMP, ID,
-        Name.empty() ? Addr->getName() : Name, Size, Flags, /*Data=*/0);
+        Name.empty() ? Addr->getName() : Name, Size, Flags, /*Data=*/0,
+        /*AuxAddr=*/RegionCTypes.lookup(ID));
     return;
   }
   // TODO: Add support for global variables on the device after declare target

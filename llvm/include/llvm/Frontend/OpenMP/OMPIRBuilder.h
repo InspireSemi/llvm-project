@@ -2221,6 +2221,20 @@ public:
   createOffloadMaptypes(SmallVectorImpl<uint64_t> &Mappings,
                         std::string VarName);
 
+  /// Per-region kernel-argument C-type arrays, keyed by the region ID.
+  ///
+  /// Recorded by the frontend once the offloading arrays exist, and consumed
+  /// when the region's offload entry is emitted, so the array travels to the
+  /// plugin through EntryTy::AuxAddr rather than through the kernel-arguments
+  /// struct that every other plugin also reads. Compile-time bookkeeping only.
+  DenseMap<Constant *, Constant *> RegionCTypes;
+
+  /// Associate a region's C-type array with its entry, for AuxAddr emission.
+  void setRegionCTypes(Constant *ID, Constant *CTypes) {
+    if (ID && CTypes)
+      RegionCTypes[ID] = CTypes;
+  }
+
   /// Create the global variable holding the offload C types information.
   LLVM_ABI GlobalVariable *
   createOffloadCtypes(SmallVectorImpl<uint8_t> &CTypes,
