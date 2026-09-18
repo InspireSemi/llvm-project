@@ -42,7 +42,10 @@ struct ArgConversionContext {
   KernelArgsTy &KernelArgs;
   KernelLaunchParamsTy &LaunchParams;
   uint32_t KLEOffset; // KernelLaunchEnvironment offset in LaunchParams.Ptrs
-  /// C types from the kernel's offload entry; null falls back to KernelArgs.
+  /// Per-argument C types, harvested from the kernel's offload entry at init.
+  /// There is no fallback: KernelArgsTy carried this array before C1 and no
+  /// longer does. Null here means every argument is read as the POINTER
+  /// default, which is almost never what a caller wants -- set it.
   const uint8_t *CTypes;
 };
 
