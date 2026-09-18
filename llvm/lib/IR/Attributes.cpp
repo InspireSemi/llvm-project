@@ -2463,7 +2463,6 @@ AttributeMask AttributeFuncs::getUBImplyingAttributes() {
   AM.addAttribute(Attribute::NoUndef);
   AM.addAttribute(Attribute::Dereferenceable);
   AM.addAttribute(Attribute::DereferenceableOrNull);
-  AM.addAttribute(Attribute::NonNull);
   return AM;
 }
 
