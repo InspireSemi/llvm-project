@@ -262,6 +262,8 @@ StringRef Triple::getVendorTypeName(VendorType Kind) {
   case Freescale: return "fsl";
   case IBM: return "ibm";
   case ImaginationTechnologies: return "img";
+  case Inspire:
+    return "inspire";
   case Intel:
     return "intel";
   case Mesa: return "mesa";
@@ -271,7 +273,6 @@ StringRef Triple::getVendorTypeName(VendorType Kind) {
   case PC: return "pc";
   case SCEI: return "scei";
   case SUSE: return "suse";
-  case Inspire: return "inspire";
   }
 
   llvm_unreachable("Invalid VendorType!");

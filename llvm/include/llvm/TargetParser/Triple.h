@@ -196,9 +196,9 @@ public:
     Mesa,
     SUSE,
     OpenEmbedded,
-    Inspire,
     Intel,
-    LastVendorType = Intel
+    Inspire,
+    LastVendorType = Inspire
   };
   enum OSType {
     UnknownOS,
