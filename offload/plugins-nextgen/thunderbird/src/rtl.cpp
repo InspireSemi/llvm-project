@@ -15,7 +15,6 @@
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
-#include <ffi.h>
 #include <glob.h>
 #include <string>
 #include <variant>
@@ -1051,11 +1050,6 @@ struct ThunderbirdPluginTy final : public GenericPluginTy {
 
   /// Initialize the plugin and return the number of devices.
   Expected<int32_t> initImpl() override {
-#ifdef USES_DYNAMIC_FFI
-    if (auto Err = Plugin::check(ffi_init(), "failed to initialize libffi"))
-      return std::move(Err);
-#endif
-
     const auto &paths = getThunderbirdDevicePaths();
     DP("Thunderbird plugin discovered %zu application mailbox device(s)\n",
        paths.size());
