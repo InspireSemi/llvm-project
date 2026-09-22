@@ -582,17 +582,7 @@ static llvm::Function *emitOutlinedFunctionPrologue(
   F->setDoesNotRecurse();
 
   // Always inline the outlined function if optimizations are enabled.
-  // For non-GPU device targets (e.g. Thunderbird/RISC-V pthread-based offload),
-  // skip alwaysinline: the outlined function runs on separate pthreads and must
-  // remain a callable function pointer passed to __kmpc_fork_call.  Inlining it
-  // makes the callback argument dead, which DAE then replaces with poison,
-  // introducing UB that folds the kernel entry into unreachable.
-  // Gated on the Thunderbird device compile alone. isGPU() is false for an
-  // ordinary host compile too, so testing it here stripped alwaysinline from
-  // every outlined function for every -fopenmp user, offload or not.
-  if (CGM.getCodeGenOpts().OptimizationLevel != 0 &&
-      !(CGM.getLangOpts().OpenMPIsTargetDevice &&
-        CGM.getTriple().getVendor() == llvm::Triple::Inspire)) {
+  if (CGM.getCodeGenOpts().OptimizationLevel != 0) {
     F->removeFnAttr(llvm::Attribute::NoInline);
     F->addFnAttr(llvm::Attribute::AlwaysInline);
   }

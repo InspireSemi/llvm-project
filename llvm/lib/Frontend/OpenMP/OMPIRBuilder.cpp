@@ -9651,24 +9651,6 @@ void OpenMPIRBuilder::createOffloadEntry(Constant *ID, Constant *Addr,
                                          GlobalValue::LinkageTypes,
                                          StringRef Name) {
   if (!Config.isGPU()) {
-    // Mark the function as a kernel entry point so that OpenMPOpt's
-    // getDeviceKernels() includes it in the Kernels set.  GPU targets are
-    // protected by their kernel calling conventions (amdgpu_kernel / spir_func)
-    // which IPSCCP treats as externally reachable.  Non-GPU targets (e.g.
-    // RISC-V / Thunderbird) have no special calling convention, so:
-    //   1. Add the "kernel" attribute for OpenMPOpt identification.
-    //   2. Set ExternalLinkage so IPSCCPPass treats the function as potentially
-    //      called from outside the module.  Without this, IPSCCP sees no direct
-    //      call sites (the function is only referenced by address in the offload
-    //      entry struct) and marks the entry block unreachable, wiping the body.
-    // Thunderbird only. !isGPU() also covers upstream's own host/GenELF64
-    // offload target, where marking every offload entry as a kernel and forcing
-    // external linkage changes codegen for a target that never asked for it.
-    if (T.getVendor() == Triple::Inspire)
-      if (Function *Fn = dyn_cast<Function>(Addr)) {
-        Fn->addFnAttr("kernel");
-        Fn->setLinkage(GlobalValue::ExternalLinkage);
-      }
     // Carry the kernel-argument C types on the entry when the frontend
     // recorded them. Empty for every target that does not need them, so no
     // vendor test is required here -- and one would be wrong anyway, since
