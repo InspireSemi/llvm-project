@@ -129,17 +129,6 @@ static std::optional<llvm::Triple> getOffloadTargetTriple(const Driver &D,
   return llvm::Triple(OffloadTargets[0]);
 }
 
-// Infer a device triple for OpenMP when users only pass --offload-arch=thunderbird.
-// Thunderbird targets RISC-V Linux with standard pthread support.
-// NOTE: Triple format matches Yocto sysroot: riscv64-inspire-linux-gnu (no 'unknown')
-static llvm::Triple
-getThunderbirdTriple(const llvm::Triple &HostTriple) {
-  // Match host pointer width to choose rv32 vs rv64.
-  return llvm::Triple(HostTriple.isArch64Bit()
-                          ? "riscv64-inspire-linux-gnu"
-                          : "riscv32-inspire-linux-gnu");
-}
-
 static std::optional<llvm::Triple>
 getNVIDIAOffloadTargetTriple(const Driver &D, const ArgList &Args,
                              const llvm::Triple &HostTriple) {
@@ -1108,8 +1097,7 @@ void Driver::CreateOffloadingDeviceToolChains(Compilation &C,
             StringToOffloadArch(getProcessorFromTargetID(NVPTXTriple, Arch)));
         bool IsAMDGPU = IsAMDOffloadArch(
             StringToOffloadArch(getProcessorFromTargetID(AMDTriple, Arch)));
-        // Accept "thunderbird" and any future "thunderbird+feature" spelling.
-        bool IsThunderbird = Arch.starts_with_insensitive("thunderbird");
+        bool IsThunderbird = Arch == "thunderbird";
         HasThunderbird |= IsThunderbird;
 
         if (!IsNVPTX && !IsAMDGPU && !IsThunderbird && !Arch.empty() &&
@@ -1135,9 +1123,7 @@ void Driver::CreateOffloadingDeviceToolChains(Compilation &C,
       }
 
       if (HasThunderbird) {
-        const llvm::Triple ThunderbirdTriple =
-            getThunderbirdTriple(C.getDefaultToolChain().getTriple());
-
+        const llvm::Triple ThunderbirdTriple("riscv64-inspire-linux-gnu");
         auto &TBTC = getOffloadToolChain(C.getInputArgs(), Action::OFK_OpenMP,
                                          ThunderbirdTriple,
                                          C.getDefaultToolChain().getTriple());
