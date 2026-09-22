@@ -1,31 +1,29 @@
-// Paired test for the RISC-V driver guards (audit S04a and S05a).
+// Paired test for the RISC-V device job of --offload-arch=thunderbird.
 //
-// Both guards originally keyed on Triple.isRISCV(), which also claims
-// riscv64-unknown-linux-gnu -- a legitimate third-party OpenMP offload triple
-// that wants none of this. They are now gated on the Inspire vendor.
+// The bound offload architecture reaches the device toolchain through
+// Generic_GCC::TranslateArgs. On RISC-V, -march takes an ISA string and the
+// architecture names a processor, so it is passed as -mcpu -- the routing ARM,
+// PowerPC and AArch64 offload architectures already get. The device job
+// therefore carries -target-cpu thunderbird and that processor's ISA.
 //
-// S04a: getRISCVTargetFeatures overrode -march to rv64gc whenever -fopenmp and
-//       --offload-arch were both present. Ungated, that rewrote the
-//       architecture of a RISC-V *host* compile that merely asked for
-//       Thunderbird offload.
-// S05a: the device compile disables PIE and forces global-dynamic TLS, because
-//       the device image is loaded with dlopen and local-exec TPREL
-//       relocations are incompatible with -shared.
+// The device compile also disables PIE and forces global-dynamic TLS: the
+// device image is loaded with dlopen, and local-exec TPREL relocations are
+// incompatible with -shared.
 //
 // REQUIRES: riscv-registered-target, x86-registered-target
 
-// The Inspire device job: rv64gc features and the TLS model.
+// The Inspire device job. Everything is asserted on the same job line -- it is
+// the device compilation that gets the processor and the TLS model, and
+// asserting them separately would pass if either landed on the host job.
 // RUN: %clang -fopenmp --offload-arch=thunderbird -### -c %s 2>&1 \
 // RUN:   | FileCheck --check-prefix=TBIRD %s
-// Both must be on the same job line -- it is the device compilation that gets
-// the TLS model, and asserting them separately would pass if the model landed
-// on the host job instead.
 // TBIRD: "-triple" "riscv64-inspire-linux-gnu"
 // TBIRD-SAME: "-ftls-model=global-dynamic"
+// TBIRD-SAME: "-target-cpu" "thunderbird"
+// TBIRD-SAME: "-target-feature" "+d"
 
-// A RISC-V host compile that asks for Thunderbird offload keeps its own -march.
-// Before S04a was narrowed this was silently rewritten to rv64gc, which would
-// show up as +f and +d below.
+// A RISC-V host compile that asks for Thunderbird offload keeps its own -march;
+// the bound architecture is translated for the device toolchain only.
 // --offload-host-only matters: without it the Thunderbird device job is in the
 // same output, it legitimately carries +d, and a whole-output CHECK-NOT would
 // match that instead of saying anything about the host.
