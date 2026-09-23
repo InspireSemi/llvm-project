@@ -3499,10 +3499,13 @@ Generic_GCC::TranslateArgs(const llvm::opt::DerivedArgList &Args, BoundArch BA,
     DAL->AddFlagArg(/*BaseArg=*/nullptr, Opts.getOption(options::OPT_fPIC));
   }
 
-  // Add the bound architecture to the arguments list if present.
+  // Add the bound architecture to the arguments list if present. RISC-V takes
+  // -mcpu like ARM, PowerPC, AArch64 and AMDGPU: its -march is an ISA string,
+  // and a bound offload architecture names a processor.
   if (!BA.empty()) {
     options::ID Opt = getTriple().isARM() || getTriple().isPPC() ||
-                              getTriple().isAArch64() || getTriple().isAMDGPU()
+                              getTriple().isAArch64() || getTriple().isAMDGPU() ||
+                              getTriple().isRISCV()
                           ? options::OPT_mcpu_EQ
                           : options::OPT_march_EQ;
     DAL->eraseArg(Opt);

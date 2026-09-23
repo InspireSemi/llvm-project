@@ -940,6 +940,9 @@ static TripleSet inferOffloadToolchains(Compilation &C,
 
   TripleSet Triples;
   for (llvm::StringRef Arch : Archs) {
+    // Thunderbird is a RISC-V processor rather than a GPU: it has no
+    // OffloadArch entry and names its own device triple.
+    bool IsThunderbird = Kind == Action::OFK_OpenMP && Arch == "thunderbird";
     OffloadArch ID = StringToOffloadArch(Arch);
     if (ID == OffloadArch::Unknown)
       ID = StringToOffloadArch(
@@ -955,20 +958,23 @@ static TripleSet inferOffloadToolchains(Compilation &C,
           << "CUDA" << Arch;
       return {};
     }
-    if (Kind == Action::OFK_OpenMP &&
+    if (Kind == Action::OFK_OpenMP && !IsThunderbird &&
         (ID == OffloadArch::Unknown || ID == OffloadArch::Unused)) {
       C.getDriver().Diag(clang::diag::err_drv_failed_to_deduce_target_from_arch)
           << Arch;
       return {};
     }
-    if (ID == OffloadArch::Unknown || ID == OffloadArch::Unused) {
+    if (!IsThunderbird &&
+        (ID == OffloadArch::Unknown || ID == OffloadArch::Unused)) {
       C.getDriver().Diag(clang::diag::err_drv_offload_bad_gpu_arch)
           << "offload" << Arch;
       return {};
     }
 
     llvm::Triple Triple =
-        OffloadArchToTriple(C.getDefaultToolChain().getTriple(), ID);
+        IsThunderbird
+            ? llvm::Triple("riscv64-inspire-linux-gnu")
+            : OffloadArchToTriple(C.getDefaultToolChain().getTriple(), ID);
 
     // Make a new argument that dispatches this argument to the appropriate
     // toolchain. This is required when we infer it and create potentially
