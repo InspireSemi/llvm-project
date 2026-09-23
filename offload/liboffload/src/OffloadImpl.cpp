@@ -268,6 +268,8 @@ ol_platform_backend_t pluginNameToBackend(StringRef Name) {
     return OL_PLATFORM_BACKEND_HOST;
   } else if (Name == "level_zero") {
     return OL_PLATFORM_BACKEND_LEVEL_ZERO;
+  } else if (Name == "thunderbird") {
+    return OL_PLATFORM_BACKEND_THUNDERBIRD;
   } else {
     return OL_PLATFORM_BACKEND_UNKNOWN;
   }
