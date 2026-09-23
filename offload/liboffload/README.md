@@ -10,7 +10,7 @@ language runtimes, rather than just OpenMP.
 The main test suite for liboffload can be run with the `check-offload-unit`
 target, which runs the `offload.unittests` executable. The test suite will
 automatically run on every available device, but can be restricted to a single
-platform (CUDA, AMDGPU) with a command line argument:
+platform (CUDA, AMDGPU, THUNDERBIRD) with a command line argument:
 
 ```sh
 $ ./offload.unittests --platform=CUDA
