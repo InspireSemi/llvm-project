@@ -197,7 +197,8 @@ public:
     SUSE,
     OpenEmbedded,
     Intel,
-    LastVendorType = Intel
+    Inspire,
+    LastVendorType = Inspire
   };
   enum OSType {
     UnknownOS,
