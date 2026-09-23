@@ -293,7 +293,8 @@ public:
     OpenEmbedded,
     Intel,
     Meta,
-    LastVendorType = Meta
+    Inspire,
+    LastVendorType = Inspire
   };
   enum OSType {
     UnknownOS,
