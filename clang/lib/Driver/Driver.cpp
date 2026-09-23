@@ -1090,13 +1090,17 @@ void Driver::CreateOffloadingDeviceToolChains(Compilation &C,
       llvm::Triple AMDTriple("amdgcn-amd-amdhsa");
       llvm::Triple NVPTXTriple("nvptx64-nvidia-cuda");
 
+      bool HasThunderbird = false;
       for (StringRef Arch :
            C.getInputArgs().getAllArgValues(options::OPT_offload_arch_EQ)) {
         bool IsNVPTX = IsNVIDIAOffloadArch(
             StringToOffloadArch(getProcessorFromTargetID(NVPTXTriple, Arch)));
         bool IsAMDGPU = IsAMDOffloadArch(
             StringToOffloadArch(getProcessorFromTargetID(AMDTriple, Arch)));
-        if (!IsNVPTX && !IsAMDGPU && !Arch.empty() &&
+        bool IsThunderbird = Arch == "thunderbird";
+        HasThunderbird |= IsThunderbird;
+
+        if (!IsNVPTX && !IsAMDGPU && !IsThunderbird && !Arch.empty() &&
             !Arch.equals_insensitive("native")) {
           Diag(clang::diag::err_drv_failed_to_deduce_target_from_arch) << Arch;
           return;
@@ -1118,6 +1122,16 @@ void Driver::CreateOffloadingDeviceToolChains(Compilation &C,
         }
       }
 
+      if (HasThunderbird) {
+        const llvm::Triple ThunderbirdTriple("riscv64-inspire-linux-gnu");
+        auto &TBTC = getOffloadToolChain(C.getInputArgs(), Action::OFK_OpenMP,
+                                         ThunderbirdTriple,
+                                         C.getDefaultToolChain().getTriple());
+        C.addOffloadDeviceToolChain(&TBTC, Action::OFK_OpenMP);
+        OffloadArchs[&TBTC] =
+            getOffloadArchs(C, C.getArgs(), Action::OFK_OpenMP, &TBTC,
+                            /*SpecificToolchain=*/true);
+      }
       // If the set is empty then we failed to find a native architecture.
       auto TCRange = C.getOffloadToolChains(Action::OFK_OpenMP);
       if (TCRange.first == TCRange.second)
