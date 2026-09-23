@@ -465,6 +465,145 @@ fatbinary(ArrayRef<std::pair<StringRef, StringRef>> InputFiles,
 }
 } // namespace amdgcn
 
+namespace riscv64{
+   Expected<StringRef> link(ArrayRef<StringRef> InputFiles, const ArgList &Args,
+                         uint16_t ActiveOffloadKindMask) {
+  llvm::TimeTraceScope TimeScope("RISCV64 Link");
+  Expected<std::string> ClangPath =
+      findProgram("clang", {getMainExecutable("clang")});
+  if (!ClangPath)
+    return ClangPath.takeError();
+
+  const llvm::Triple Triple(Args.getLastArgValue(OPT_triple_EQ));
+  StringRef Arch = Args.getLastArgValue(OPT_arch_EQ);
+  // Create a new file to write the linked device image to.
+  auto TempFileOrErr =
+      createOutputFile(sys::path::filename(ExecutableName) + "." +
+                           Triple.getArchName() + "." + Arch,
+                       "img");
+  if (!TempFileOrErr)
+    return TempFileOrErr.takeError();
+
+    SmallVector<StringRef, 16> CmdArgs{
+      *ClangPath,
+      "--no-default-config",
+      "-o",
+      *TempFileOrErr,
+      Args.MakeArgString("--target=" + Triple.getTriple()),
+      // Skip startup files (crt0.o, etc.) as entry point is called via dlopen,
+      // but allow standard library and default libs for Linux toolchain
+      "-nostartfiles",
+      "-Wl,--no-undefined",
+      // Create shared objects for dlopen compatibility
+      "-shared",      // Create a shared object (.so)
+      "-fPIC",        // Position-independent code
+      "-fno-pie",     // But not a PIE executable
+  };
+
+  // Add device sysroot if provided
+  if (!Args.hasArg(OPT_device_sysroot_EQ))
+    return createStringError("RISC-V offload linking requires --device-sysroot");
+  
+  StringRef DeviceSysroot = Args.getLastArgValue(OPT_device_sysroot_EQ);
+  CmdArgs.push_back(Args.MakeArgString("--sysroot=" + DeviceSysroot));
+      
+  // Add library paths for shared and static libraries in the sysroot
+  CmdArgs.push_back(Args.MakeArgString("-L" + DeviceSysroot + "/lib"));
+  CmdArgs.push_back(Args.MakeArgString("-L" + DeviceSysroot + "/usr/lib"));
+  
+  // Find and add GCC runtime library directory for libgcc.a
+  // Look for usr/lib/<vendor>-<os>/<version>/ pattern
+  // Use the triple without environment (riscv64-inspire-linux, not riscv64-inspire-linux-gnu)
+  std::string TripleDir = (Triple.getArchName() + "-" + 
+                            Triple.getVendorName() + "-" + 
+                            Triple.getOSName()).str();
+  SmallString<128> GccLibPath(DeviceSysroot);
+  sys::path::append(GccLibPath, "usr", "lib", TripleDir);
+  
+  std::error_code EC;
+  bool FoundGccLib = false;
+  for (sys::fs::directory_iterator DI(GccLibPath, EC), DE; !EC && DI != DE; DI.increment(EC)) {
+    if (sys::fs::is_directory(DI->path())) {
+      SmallString<128> LibGccPath(DI->path());
+      sys::path::append(LibGccPath, "libgcc.a");
+      if (sys::fs::exists(LibGccPath)) {
+        CmdArgs.push_back(Args.MakeArgString("-L" + DI->path()));
+        FoundGccLib = true;
+        break;
+      }
+    }
+  }
+  
+  CmdArgs.push_back("-fuse-ld=lld");
+
+  // Determine whether to pass -march or -mcpu based on the arch string.
+  auto IsRISCVISA = [](StringRef S) {
+    return S.starts_with("rv32") || S.starts_with("rv64");
+  };
+  if (!Arch.empty()) {
+    if (IsRISCVISA(Arch)) {
+      CmdArgs.push_back(Args.MakeArgString("-march=" + Arch));
+    } else if (Arch != "generic" && !Arch.ends_with("-host")) {
+      // Treat non-ISA token as CPU name (e.g., "thunderbird").
+      CmdArgs.push_back(Args.MakeArgString("-mcpu=" + Arch));
+    }
+  }
+
+  // Forward plugin/LTO options to the device linker plugin 
+  for (auto &Arg : Args.filtered(OPT_offload_opt_eq_minus, OPT_mllvm))
+    CmdArgs.append({"-Xlinker",
+                    Args.MakeArgString("--plugin-opt=" + StringRef(Arg->getValue()))});
+
+  for (StringRef InputFile : InputFiles)
+    CmdArgs.push_back(InputFile);
+
+  // The device image is a shared object loaded by the device server at run
+  // time, and its OpenMP runtime lives in libomp.so on the device image rather
+  // than being linked into the image itself. Link against libomp so the
+  // __kmpc_* references have declarations: -Wl,--no-undefined above then still
+  // rejects a genuinely missing symbol, while the runtime symbols resolve
+  // through DT_NEEDED at dlopen. Vendor-gated because a generic riscv64 OpenMP
+  // target has no such runtime on its device.
+  if (Triple.getVendor() == llvm::Triple::Inspire) {
+    CmdArgs.push_back("-lomp");
+
+    // Math and atomics. Device kernels routinely call into libm -- sqrt in the
+    // nrm2-style BLAS reductions, for one -- and, for accumulator types the
+    // target has no lock-free instruction for (16-byte complex on riscv64), the
+    // compiler emits the out-of-line libatomic helpers __atomic_load and
+    // __atomic_compare_exchange. Clang links neither implicitly for C, and a
+    // `#pragma omp target` region has no way to ask for them, so the toolchain
+    // has to supply them or the device link fails on symbols the user never
+    // referenced by name.
+    //
+    // --as-needed so an image that does not use them records no DT_NEEDED entry
+    // for them; symbol resolution against -Wl,--no-undefined is unaffected.
+    CmdArgs.push_back("-Wl,--as-needed");
+    CmdArgs.push_back("-lm");
+    CmdArgs.push_back("-latomic");
+    CmdArgs.push_back("-Wl,--no-as-needed");
+  }
+
+  CmdArgs.push_back("-Wl,-Bsymbolic");
+
+  if (SaveTemps && linkerSupportsLTO(Args))
+    CmdArgs.push_back("-Wl,--save-temps");
+
+  if (Args.hasArg(OPT_embed_bitcode))
+    CmdArgs.push_back("-Wl,--lto-emit-llvm");
+
+  for (StringRef Arg : Args.getAllArgValues(OPT_linker_arg_EQ))
+    CmdArgs.append({"-Xlinker", Args.MakeArgString(Arg)});
+  for (StringRef Arg : Args.getAllArgValues(OPT_compiler_arg_EQ))
+    CmdArgs.push_back(Args.MakeArgString(Arg));
+
+  if (Error Err = executeCommands(*ClangPath, CmdArgs))
+    return std::move(Err);
+
+  return *TempFileOrErr;
+}
+} // namespace riscv64
+
 namespace generic {
 Expected<StringRef> clang(ArrayRef<StringRef> InputFiles, const ArgList &Args,
                           uint16_t ActiveOffloadKindMask) {
@@ -604,6 +743,15 @@ Expected<StringRef> linkDevice(ArrayRef<StringRef> InputFiles,
   case Triple::systemz:
   case Triple::loongarch64:
     return generic::clang(InputFiles, Args, ActiveOffloadKindMask);
+  case Triple::riscv64:
+    // riscv64::link builds an Inspire device image: -nostartfiles -shared
+    // -fPIC -fno-pie, a mandatory --device-sysroot, and Inspire-only runtime
+    // libraries. A generic riscv64 offload target wants none of that, and at
+    // base reached the unsupported-arch error below, so leave it there.
+    if (Triple.getVendor() == Triple::Inspire)
+      return riscv64::link(InputFiles, Args, ActiveOffloadKindMask);
+    return createStringError(Triple.getArchName() +
+                             " linking is not supported");
   default:
     return createStringError(Triple.getArchName() +
                              " linking is not supported");
@@ -884,6 +1032,15 @@ DerivedArgList getLinkerArgs(ArrayRef<OffloadFile> Input,
   for (StringRef Arg : Args.getAllArgValues(OPT_device_linker_args_EQ)) {
     auto [Triple, Value] = Arg.split('=');
     llvm::Triple TT(Triple);
+    
+    // Check if this is a --device-sysroot argument and extract it separately
+    if (Arg.starts_with("--device-sysroot=")) {
+      StringRef SysrootPath = Arg.substr(strlen("--device-sysroot="));
+      DAL.AddJoinedArg(nullptr, Tbl.getOption(OPT_device_sysroot_EQ),
+                       Args.MakeArgString(SysrootPath));
+      continue;
+    }
+    
     // If this isn't a recognized triple then it's an `arg=value` option.
     if (TT.getArch() == Triple::ArchType::UnknownArch)
       DAL.AddJoinedArg(nullptr, Tbl.getOption(OPT_linker_arg_EQ),
