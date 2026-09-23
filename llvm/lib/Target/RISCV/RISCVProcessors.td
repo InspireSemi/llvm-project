@@ -799,3 +799,15 @@ def ANDES_AX45MPV : RISCVProcessorModel<"andes-ax45mpv",
                                          FeatureStdExtV,
                                          FeatureVendorXAndesPerf],
                                         Andes45TuneFeatures>;
+
+def THUNDERBIRD : RISCVProcessorModel<"thunderbird",
+                                      NoSchedModel,
+                                      [Feature64Bit,
+                                       FeatureStdExtI,
+                                       FeatureStdExtM,
+                                       FeatureStdExtA,
+                                       FeatureStdExtF,
+                                       FeatureStdExtD,
+                                       FeatureStdExtC,
+                                       FeatureStdExtZicsr,
+                                       FeatureStdExtZifencei]>;
