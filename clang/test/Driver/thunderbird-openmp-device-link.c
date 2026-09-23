@@ -1,4 +1,4 @@
-// Paired test for the device link line (audit S05b).
+// The device link line of --offload-arch=thunderbird.
 //
 // Thunderbird device images are loaded with dlopen()/memfd, which honours
 // PT_LOAD segment permissions. LLD's rosegment, on by default, splits R-- and
@@ -7,23 +7,21 @@
 // runs. LinkerWrapper::ConstructJob therefore appends --no-rosegment to the
 // device linker arguments, gated on an Inspire-vendor OpenMP toolchain.
 //
-// Both halves live here on purpose. This guard changes the link line and no
-// generated object, so nothing the codegen axes compare can see it: if it
-// stopped firing, every other check in the harness would stay green while the
-// device faulted at run time. The negative half is what proves the positive
-// half is a real vendor gate rather than something every offload target gets.
+// Both halves live here on purpose. The flag changes the link line and no
+// generated object, so nothing that compares compiler output can see it: if
+// it stopped firing, every codegen check would stay green while the device
+// faulted at run time. The negative half is what proves the positive half is
+// a real vendor gate rather than something every offload target gets.
 //
 // -c must NOT appear in these RUN lines. It stops the driver at the compile
 // phase, so no link action is created, LinkerWrapper::ConstructJob never runs,
 // and the test would pass while asserting nothing. The sibling
-// driver-arch-and-pie.c does use -c, because it checks -cc1 flags instead.
+// thunderbird-openmp-toolchain.c does use -c, because it checks -cc1 flags.
 //
 // REQUIRES: riscv-registered-target, x86-registered-target, amdgpu-registered-target
 
 // The flag reaches clang-linker-wrapper as a triple-qualified --device-linker
 // argument, which the wrapper re-splits into -Xlinker for the device clang.
-// --target is pinned because the Thunderbird triple is derived from the host's
-// pointer width.
 // RUN: %clang -fopenmp --offload-arch=thunderbird \
 // RUN:     --target=x86_64-unknown-linux-gnu -### %s 2>&1 \
 // RUN:   | FileCheck --check-prefix=TBIRD %s
