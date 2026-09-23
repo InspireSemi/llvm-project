@@ -945,6 +945,9 @@ inferOffloadToolchains(Compilation &C, Action::OffloadKind Kind) {
 
   llvm::DenseSet<llvm::StringRef> Triples;
   for (llvm::StringRef Arch : Archs) {
+    // Thunderbird is a RISC-V processor rather than a GPU: it has no
+    // OffloadArch entry and names its own device triple.
+    bool IsThunderbird = Kind == Action::OFK_OpenMP && Arch == "thunderbird";
     OffloadArch ID = StringToOffloadArch(Arch);
     if (ID == OffloadArch::UNKNOWN)
       ID = StringToOffloadArch(
@@ -960,20 +963,23 @@ inferOffloadToolchains(Compilation &C, Action::OffloadKind Kind) {
           << "CUDA" << Arch;
       return llvm::DenseSet<llvm::StringRef>();
     }
-    if (Kind == Action::OFK_OpenMP &&
+    if (Kind == Action::OFK_OpenMP && !IsThunderbird &&
         (ID == OffloadArch::UNKNOWN || ID == OffloadArch::UNUSED)) {
       C.getDriver().Diag(clang::diag::err_drv_failed_to_deduce_target_from_arch)
           << Arch;
       return llvm::DenseSet<llvm::StringRef>();
     }
-    if (ID == OffloadArch::UNKNOWN || ID == OffloadArch::UNUSED) {
+    if (!IsThunderbird &&
+        (ID == OffloadArch::UNKNOWN || ID == OffloadArch::UNUSED)) {
       C.getDriver().Diag(clang::diag::err_drv_offload_bad_gpu_arch)
           << "offload" << Arch;
       return llvm::DenseSet<llvm::StringRef>();
     }
 
     StringRef Triple;
-    if (ID == OffloadArch::AMDGCNSPIRV)
+    if (IsThunderbird)
+      Triple = "riscv64-inspire-linux-gnu";
+    else if (ID == OffloadArch::AMDGCNSPIRV)
       Triple = "spirv64-amd-amdhsa";
     else if (IsNVIDIAOffloadArch(ID))
       Triple = C.getDefaultToolChain().getTriple().isArch64Bit()
