@@ -2225,6 +2225,38 @@ public:
   createOffloadMaptypes(SmallVectorImpl<uint64_t> &Mappings,
                         std::string VarName);
 
+  /// Per-region kernel-argument C-type arrays, keyed by the region ID.
+  ///
+  /// Recorded by the frontend once the offloading arrays exist, and consumed
+  /// when the region's offload entry is emitted, so the array travels to the
+  /// plugin through EntryTy::AuxAddr rather than through the kernel-arguments
+  /// struct that every other plugin also reads. Compile-time bookkeeping only.
+  DenseMap<Constant *, Constant *> RegionCTypes;
+
+  /// Associate a region's C-type array with its entry, for AuxAddr emission.
+  void setRegionCTypes(Constant *ID, Constant *CTypes) {
+    if (ID && CTypes)
+      RegionCTypes[ID] = CTypes;
+  }
+
+  /// Whether to emit the kernel-argument C-type array at all.
+  ///
+  /// Only Thunderbird consumes it -- it dispatches through libffi and needs
+  /// each parameter's type at run time. Emitting it unconditionally is not
+  /// free for everyone else even though nothing reads it: creating the global
+  /// consumes a name suffix, so every later `.offload_sizes` / `.offload_maptypes`
+  /// in the module is renumbered, which is a visible codegen change for every
+  /// other offload target.
+  bool EmitKernelArgCTypes = false;
+
+  /// Set by the frontend when an offload target is an Inspire device.
+  void setEmitKernelArgCTypes(bool Emit) { EmitKernelArgCTypes = Emit; }
+
+  /// Create the global variable holding the offload C types information.
+  LLVM_ABI GlobalVariable *
+  createOffloadCtypes(SmallVectorImpl<uint8_t> &CTypes,
+                      std::string VarName);
+
   /// Create the global variable holding the offload names information.
   LLVM_ABI GlobalVariable *
   createOffloadMapnames(SmallVectorImpl<llvm::Constant *> &Names,
@@ -2273,6 +2305,10 @@ public:
     /// region, or nullptr if there are no separate map types for the region
     /// end.
     Value *MapTypesArrayEnd = nullptr;
+    /// The array of C type information passed to the device runtime for
+    /// each kernel argument, used by the device runtime to interpret argument
+    /// types correctly.
+    Value *CTypesArray = nullptr;
     /// The array of user-defined mappers passed to the runtime library.
     Value *MappersArray = nullptr;
     /// The array of original declaration names of mapped pointers sent to the
@@ -2435,6 +2471,7 @@ public:
     MapDeviceInfoArrayTy DevicePointers;
     MapValuesArrayTy Sizes;
     MapFlagsArrayTy Types;
+    SmallVector<omp::OpenMPParamCType, 4> CTypes;
     MapNamesArrayTy Names;
     StructNonContiguousInfo NonContigInfo;
 
@@ -2447,6 +2484,7 @@ public:
                             CurInfo.DevicePointers.end());
       Sizes.append(CurInfo.Sizes.begin(), CurInfo.Sizes.end());
       Types.append(CurInfo.Types.begin(), CurInfo.Types.end());
+      CTypes.append(CurInfo.CTypes.begin(), CurInfo.CTypes.end());
       Names.append(CurInfo.Names.begin(), CurInfo.Names.end());
       NonContigInfo.Dims.append(CurInfo.NonContigInfo.Dims.begin(),
                                 CurInfo.NonContigInfo.Dims.end());

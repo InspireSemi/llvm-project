@@ -249,6 +249,25 @@ enum class OpenMPOffloadMappingFlags : uint64_t {
   LLVM_MARK_AS_BITMASK_ENUM(/* LargestFlag = */ OMP_MAP_MEMBER_OF)
 };
 
+/// C type information for kernel parameters.
+/// This enum mirrors tgt_param_ctype from the OpenMP runtime (omptarget.h).
+/// Frontend code uses this enum class; values are converted to uint8_t when
+/// creating constant arrays for the runtime.
+enum class OpenMPParamCType : uint8_t {
+  OMP_PARAM_CTYPE_VOID     = 0,
+  OMP_PARAM_CTYPE_INT8     = 1,
+  OMP_PARAM_CTYPE_UINT8    = 2,
+  OMP_PARAM_CTYPE_INT16    = 3,
+  OMP_PARAM_CTYPE_UINT16   = 4,
+  OMP_PARAM_CTYPE_INT32    = 5,
+  OMP_PARAM_CTYPE_UINT32   = 6,
+  OMP_PARAM_CTYPE_INT64    = 7,
+  OMP_PARAM_CTYPE_UINT64   = 8,
+  OMP_PARAM_CTYPE_FLOAT    = 9,
+  OMP_PARAM_CTYPE_DOUBLE   = 10,
+  OMP_PARAM_CTYPE_POINTER  = 11,
+};
+
 enum OpenMPOffloadingReservedDeviceIDs {
   /// Device ID if the device was not defined, runtime should get it
   /// from environment variables in the spec.

@@ -8071,6 +8071,19 @@ OpenMPIRBuilder::createOffloadMaptypes(SmallVectorImpl<uint64_t> &Mappings,
   return MaptypesArrayGlobal;
 }
 
+GlobalVariable *
+OpenMPIRBuilder::createOffloadCtypes(SmallVectorImpl<uint8_t> &CTypes,
+                                     std::string VarName) {
+  llvm::Constant *CtypesArrayInit =
+      llvm::ConstantDataArray::get(M.getContext(), CTypes);
+  auto *CtypesArrayGlobal = new llvm::GlobalVariable(
+      M, CtypesArrayInit->getType(),
+      /*isConstant=*/true, llvm::GlobalValue::PrivateLinkage, CtypesArrayInit,
+      VarName);
+  CtypesArrayGlobal->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+  return CtypesArrayGlobal;
+}
+
 void OpenMPIRBuilder::createMapperAllocas(const LocationDescription &Loc,
                                           InsertPointTy AllocaIP,
                                           unsigned NumOperands,
@@ -8137,6 +8150,7 @@ void OpenMPIRBuilder::emitOffloadingArraysArgument(IRBuilderBase &Builder,
     RTArgs.PointersArray = ConstantPointerNull::get(VoidPtrPtrTy);
     RTArgs.SizesArray = ConstantPointerNull::get(Int64PtrTy);
     RTArgs.MapTypesArray = ConstantPointerNull::get(Int64PtrTy);
+    RTArgs.CTypesArray = ConstantPointerNull::get(Int64PtrTy);
     RTArgs.MapNamesArray = ConstantPointerNull::get(VoidPtrPtrTy);
     RTArgs.MappersArray = ConstantPointerNull::get(VoidPtrPtrTy);
     return;
@@ -8159,6 +8173,14 @@ void OpenMPIRBuilder::emitOffloadingArraysArgument(IRBuilderBase &Builder,
                                                  : Info.RTArgs.MapTypesArray,
       /*Idx0=*/0,
       /*Idx1=*/0);
+  
+  // Create GEP for C types array (using Int8 type for uint8_t).
+  if (EmitKernelArgCTypes && Info.RTArgs.CTypesArray) {
+    auto Int8Ty = Type::getInt8Ty(M.getContext());
+    RTArgs.CTypesArray = Builder.CreateConstInBoundsGEP2_32(
+        ArrayType::get(Int8Ty, Info.NumberOfPtrs), Info.RTArgs.CTypesArray,
+        /*Idx0=*/0, /*Idx1=*/0);
+  }
 
   // Only emit the mapper information arrays if debug information is
   // requested.
@@ -8635,6 +8657,17 @@ Error OpenMPIRBuilder::emitOffloadingArrays(
   std::string MaptypesName = createPlatformSpecificName({"offload_maptypes"});
   auto *MapTypesArrayGbl = createOffloadMaptypes(Mapping, MaptypesName);
   Info.RTArgs.MapTypesArray = MapTypesArrayGbl;
+
+  // Create the C types array - always constant like map types. Emitted only
+  // for targets that consume it; see EmitKernelArgCTypes.
+  if (EmitKernelArgCTypes) {
+    SmallVector<uint8_t, 4> CTypesVec;
+    for (auto ctype : CombinedInfo.CTypes)
+      CTypesVec.push_back(static_cast<uint8_t>(ctype));
+    std::string CtypesName = createPlatformSpecificName({"offload_ctypes"});
+    auto *CTypesArrayGbl = createOffloadCtypes(CTypesVec, CtypesName);
+    Info.RTArgs.CTypesArray = CTypesArrayGbl;
+  }
 
   // The information types are only built if provided.
   if (!CombinedInfo.Names.empty()) {
@@ -9645,9 +9678,14 @@ void OpenMPIRBuilder::createOffloadEntry(Constant *ID, Constant *Addr,
                                          GlobalValue::LinkageTypes,
                                          StringRef Name) {
   if (!Config.isGPU()) {
+    // Carry the kernel-argument C types on the entry when the frontend
+    // recorded them. Empty for every target that does not need them, so no
+    // vendor test is required here -- and one would be wrong anyway, since
+    // this entry is emitted into the x86-64 host module.
     llvm::offloading::emitOffloadingEntry(
         M, object::OffloadKind::OFK_OpenMP, ID,
-        Name.empty() ? Addr->getName() : Name, Size, Flags, /*Data=*/0);
+        Name.empty() ? Addr->getName() : Name, Size, Flags, /*Data=*/0,
+        /*AuxAddr=*/RegionCTypes.lookup(ID));
     return;
   }
   // TODO: Add support for global variables on the device after declare target
