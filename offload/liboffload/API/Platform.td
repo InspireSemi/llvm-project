@@ -30,6 +30,7 @@ def : Enum {
     Etor<"CUDA", "The backend is CUDA">,
     Etor<"AMDGPU", "The backend is AMDGPU">,
     Etor<"HOST", "The backend is the host">,
+    Etor<"THUNDERBIRD", "The backend is THUNDERBIRD">,
   ];
 }
 
