@@ -854,6 +854,12 @@ TEST(TripleTest, ParsedIDs) {
   EXPECT_EQ(Triple::Hurd, T.getOS());
   EXPECT_EQ(Triple::GNU, T.getEnvironment());
 
+  T = Triple("riscv64-inspire-linux-gnu");
+  EXPECT_EQ(Triple::riscv64, T.getArch());
+  EXPECT_EQ(Triple::Inspire, T.getVendor());
+  EXPECT_EQ(Triple::Linux, T.getOS());
+  EXPECT_EQ(Triple::GNU, T.getEnvironment());
+
   T = Triple("armv7hl-suse-linux-gnueabi");
   EXPECT_EQ(Triple::arm, T.getArch());
   EXPECT_EQ(Triple::SUSE, T.getVendor());
