@@ -79,6 +79,9 @@ def linker_arg_EQ : Joined<["--"], "linker-arg=">,
 def compiler_arg_EQ : Joined<["--"], "compiler-arg=">,
   Flags<[DeviceOnlyOption, HelpHidden]>,
   HelpText<"An extra argument to be passed to the compiler">;
+def device_sysroot_EQ : Joined<["--"], "device-sysroot=">,
+  Flags<[WrapperOnlyOption]>, MetaVarName<"<path>">,
+  HelpText<"Set the system root for device linking">;
 
 // Arguments for the LLVM backend.
 def mllvm : Separate<["-"], "mllvm">, Flags<[WrapperOnlyOption]>,
