@@ -1138,3 +1138,15 @@ def XUANTIE_C920V2 : RISCVProcessorModel<"xt-c920v2",
                                          [TuneVXRMPipelineFlush,
                                           TunePostRAScheduler]>;
 // clang-format on
+
+def THUNDERBIRD : RISCVProcessorModel<"thunderbird",
+                                      NoSchedModel,
+                                      [Feature64Bit,
+                                       FeatureStdExtI,
+                                       FeatureStdExtM,
+                                       FeatureStdExtA,
+                                       FeatureStdExtF,
+                                       FeatureStdExtD,
+                                       FeatureStdExtC,
+                                       FeatureStdExtZicsr,
+                                       FeatureStdExtZifencei]>;
