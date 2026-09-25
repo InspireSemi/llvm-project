@@ -2331,6 +2331,11 @@ int target(ident_t *Loc, DeviceTy &Device, void *HostPtr,
                    << TargetTable->EntriesBegin[TM->Index].SymbolName
                    << " with pointer " << TgtEntryPtr << " (index=" << TM->Index
                    << ").";
+  if (!TgtEntryPtr) {
+    REPORT() << "Kernel " << TargetTable->EntriesBegin[TM->Index].SymbolName
+             << " was not loaded on device " << DeviceId << ", abort target.";
+    return OFFLOAD_FAIL;
+  }
 
   {
     assert(KernelArgs.NumArgs == TgtArgs.size() && "Argument count mismatch!");
@@ -2436,6 +2441,12 @@ int target_replay(ident_t *Loc, DeviceTy &Device, void *HostPtr,
   // Retrieve the device pointers for each symbol.
   for (auto &S : Symbols)
     S.DevPtr = S.TargetTable->EntriesBegin[S.TM->Index].Address;
+  if (!Symbols[0].DevPtr) {
+    REPORT() << "Kernel "
+             << Symbols[0].TargetTable->EntriesBegin[Symbols[0].TM->Index].SymbolName
+             << " was not loaded on device " << DeviceId << ", abort target.";
+    return OFFLOAD_FAIL;
+  }
 
   // Initialize the device memory of each global.
   for (int32_t I = 0; I < NumGlobals; ++I) {

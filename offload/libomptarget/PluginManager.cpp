@@ -459,8 +459,12 @@ static int loadImagesOntoDevice(DeviceTy &Device) {
               REPORT() << "Failed to write symbol for USM " << Entry.SymbolName;
         } else if (Entry.Address) {
           if (Device.RTL->get_function(Binary, Entry.SymbolName,
-                                       &DeviceEntry.Address) != OFFLOAD_SUCCESS)
+                                       &DeviceEntry.Address) != OFFLOAD_SUCCESS) {
             REPORT() << "Failed to load kernel " << Entry.SymbolName;
+            // Still the host entry's address: no device kernel to launch, and
+            // the launch refuses a null one.
+            DeviceEntry.Address = nullptr;
+          }
         }
         ODBG(ODT_Mapping) << "Entry point " << Entry.Address << " maps to"
                           << (Entry.Size ? " global" : "") << " "
