@@ -167,6 +167,13 @@ struct DeviceTy {
   /// Indicate that there are pending images for this device or not.
   void setHasPendingImages(bool V) { HasPendingImages = V; }
 
+  /// Check whether loading this device's images failed. The device is then
+  /// unusable, and every later request for it reports the failure.
+  bool imagesFailedToLoad() const { return ImagesFailedToLoad; }
+
+  /// Record that loading this device's images failed.
+  void setImagesFailedToLoad() { ImagesFailedToLoad = true; }
+
 private:
   /// Deinitialize the device (and plugin).
   void deinit();
@@ -181,6 +188,9 @@ private:
 
   /// Flag to indicate pending images (true after construction).
   bool HasPendingImages = true;
+
+  /// Flag to indicate that loading the images failed.
+  bool ImagesFailedToLoad = false;
 };
 
 #endif

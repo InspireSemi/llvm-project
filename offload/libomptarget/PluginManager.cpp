@@ -395,6 +395,9 @@ static int loadImagesOntoDevice(DeviceTy &Device) {
   int Rc = OFFLOAD_SUCCESS;
   {
     std::lock_guard<decltype(PM->TrlTblMtx)> LG(PM->TrlTblMtx);
+    // Another thread may have failed to load them while this one waited.
+    if (Device.imagesFailedToLoad())
+      return OFFLOAD_FAIL;
     for (auto *HostEntriesBegin : PM->HostEntriesBeginRegistrationOrder) {
       TranslationTable *TransTable =
           &PM->HostEntriesBeginToTransTable[HostEntriesBegin];
@@ -443,8 +446,14 @@ static int loadImagesOntoDevice(DeviceTy &Device) {
         if (Entry.Size) {
           if (!(Entry.Flags & OMP_DECLARE_TARGET_INDIRECT_VTABLE))
             if (Device.RTL->get_global(Binary, Entry.Size, Entry.SymbolName,
-                                       &DeviceEntry.Address) != OFFLOAD_SUCCESS)
+                                       &DeviceEntry.Address) != OFFLOAD_SUCCESS) {
+              // The entry still holds the host global's address, which is no
+              // device address: transfers and mappings of the global would all
+              // go to host memory. The image is not usable.
               REPORT() << "Failed to load symbol " << Entry.SymbolName;
+              Rc = OFFLOAD_FAIL;
+              break;
+            }
 
           // If unified memory is active, the corresponding global is a device
           // reference to the host global. We need to initialize the pointer on
@@ -473,6 +482,8 @@ static int loadImagesOntoDevice(DeviceTy &Device) {
 
         DeviceEntries.emplace_back(DeviceEntry);
       }
+      if (Rc != OFFLOAD_SUCCESS)
+        break;
 
       // Set the storage for the table and get a pointer to it.
       __tgt_target_table DeviceTable{&DeviceEntries[0],
@@ -512,11 +523,16 @@ static int loadImagesOntoDevice(DeviceTy &Device) {
         // target.
         if (CurrDeviceEntry->Flags & OMP_DECLARE_TARGET_INDIRECT) {
           AsyncInfoTy AsyncInfo(Device);
-          void *DevPtr;
-          Device.retrieveData(&DevPtr, CurrDeviceEntryAddr, sizeof(void *),
-                              AsyncInfo, /*Entry=*/nullptr, &HDTTMap);
-          if (AsyncInfo.synchronize() != OFFLOAD_SUCCESS)
-            return OFFLOAD_FAIL;
+          void *DevPtr = nullptr;
+          if (Device.retrieveData(&DevPtr, CurrDeviceEntryAddr, sizeof(void *),
+                                  AsyncInfo, /*Entry=*/nullptr,
+                                  &HDTTMap) != OFFLOAD_SUCCESS ||
+              AsyncInfo.synchronize() != OFFLOAD_SUCCESS) {
+            REPORT() << "Failed to read indirect symbol "
+                     << CurrDeviceEntry->SymbolName;
+            Rc = OFFLOAD_FAIL;
+            break;
+          }
           CurrDeviceEntryAddr = DevPtr;
         }
 
@@ -536,11 +552,18 @@ static int loadImagesOntoDevice(DeviceTy &Device) {
 
         // Notify about the new mapping.
         if (Device.notifyDataMapped(CurrHostEntry->Address,
-                                    CurrHostEntry->Size))
-          return OFFLOAD_FAIL;
+                                    CurrHostEntry->Size)) {
+          Rc = OFFLOAD_FAIL;
+          break;
+        }
       }
+      if (Rc != OFFLOAD_SUCCESS)
+        break;
     }
     Device.setHasPendingImages(false);
+    // A failed load is not retried: the device's tables are incomplete.
+    if (Rc != OFFLOAD_SUCCESS)
+      Device.setImagesFailedToLoad();
   }
 
   if (Rc != OFFLOAD_SUCCESS)
@@ -567,11 +590,14 @@ Expected<DeviceTy &> PluginManager::getDevice(uint32_t DeviceNo) {
     DevicePtr = &*(*ExclusiveDevicesAccessor)[DeviceNo];
   }
 
-  // Check whether global data has been mapped for this device
-  if (DevicePtr->hasPendingImages())
-    if (loadImagesOntoDevice(*DevicePtr) != OFFLOAD_SUCCESS)
-      return error::createOffloadError(error::ErrorCode::BACKEND_FAILURE,
-                                       "failed to load images on device '%i'",
-                                       DeviceNo);
+  // Check whether global data has been mapped for this device. A failure is
+  // reported on every request, not only the one that attempted the load.
+  if (DevicePtr->hasPendingImages() &&
+      loadImagesOntoDevice(*DevicePtr) != OFFLOAD_SUCCESS)
+    assert(DevicePtr->imagesFailedToLoad() && "failed load not recorded");
+  if (DevicePtr->imagesFailedToLoad())
+    return error::createOffloadError(error::ErrorCode::BACKEND_FAILURE,
+                                     "failed to load images on device '%i'",
+                                     DeviceNo);
   return *DevicePtr;
 }
