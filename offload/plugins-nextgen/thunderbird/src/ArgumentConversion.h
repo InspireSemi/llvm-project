@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// Converts OpenMP kernel arguments (map types, host pointers, scalars) into the
-// tbird_arg_t format expected by the Thunderbird device FFI layer.
+// Converts OpenMP kernel arguments (device pointers and by-copy scalars) into
+// the tbird_arg_t format expected by the Thunderbird device FFI layer.
 //
 //===----------------------------------------------------------------------===//
 
@@ -31,8 +31,10 @@ namespace omp {
 namespace target {
 namespace plugin {
 
-/// Convert OpenMP C type enum to tbird_arg_type_t.
-tbird_arg_type_t convert_omp_ctype_to_tbird(uint8_t omp_ctype);
+/// The parameter type codes in <kernel>_ctypes, as clang emits them
+/// (CGOpenMPRuntime.cpp, emitThunderbirdKernelArgTypes). A kernel parameter is
+/// a pointer or a by-copy scalar widened to i64; nothing else occurs.
+enum : uint8_t { KernelParamInt64 = 7, KernelParamPointer = 11 };
 
 /// Context passed to argument conversion helpers.
 /// Uses MemoryPool reference (not ThunderbirdDeviceTy) to keep this
@@ -42,36 +44,30 @@ struct ArgConversionContext {
   KernelArgsTy &KernelArgs;
   KernelLaunchParamsTy &LaunchParams;
   uint32_t KLEOffset; // KernelLaunchEnvironment offset in LaunchParams.Ptrs
-  /// Per-argument C types, harvested from the kernel's offload entry at init.
-  /// There is no fallback: KernelArgsTy carried this array before C1 and no
-  /// longer does. Null here means every argument is read as the POINTER
-  /// default, which is almost never what a caller wants -- set it.
+  /// The kernel's parameter type codes, one per parameter in parameter order,
+  /// read from the <kernel>_ctypes global the compiler emits in the device
+  /// image. Code 0 is the leading dyn_ptr parameter; code k (k >= 1) describes
+  /// the argument whose value is in LaunchParams.Ptrs[k - 1 + KLEOffset].
   const uint8_t *CTypes;
+  uint32_t NumCTypes;
 };
 
-/// Get OpenMP map type flags for argument (with safe bounds checking).
-std::pair<int64_t, bool> getArgMapType(uint32_t ArgIdx,
-                                       const ArgConversionContext &Ctx);
-
-/// Get scalar type size in bytes.
-size_t getScalarSize(tbird_arg_type_t Type);
-
-/// Convert pointer argument from OpenMP to tbird format.
-Error convertPointerArgument(uint32_t OmpIdx, tbird_arg_t &OutArg,
+/// Convert pointer argument ArgIdx (0-based, dyn_ptr excluded) to tbird format.
+Error convertPointerArgument(uint32_t ArgIdx, tbird_arg_t &OutArg,
                              const ArgConversionContext &Ctx);
 
-/// Convert scalar argument from OpenMP to tbird format.
-/// Handles by-value (literal), by-reference, and promotion to PTR.
-Error convertScalarArgument(uint32_t OmpIdx, tbird_arg_t &OutArg,
-                            int64_t MapType, bool HasMapType,
+/// Convert scalar argument ArgIdx (0-based, dyn_ptr excluded) to an INT64
+/// tbird argument: the argument's cell holds its value, widened to i64.
+Error convertScalarArgument(uint32_t ArgIdx, tbird_arg_t &OutArg,
                             const ArgConversionContext &Ctx);
 
-/// Convert all OpenMP kernel arguments to tbird_arg_t format.
-/// Returns the number of converted arguments (excluding VOID types).
+/// Convert all OpenMP kernel arguments to tbird_arg_t format, typed by the
+/// kernel's parameter codes. Returns the number of converted arguments
+/// (dyn_ptr excluded; see prependThreadId).
 Expected<uint32_t> convertKernelArguments(tbird_arg_t ArgsOut[TBIRD_MAX_ARGS],
                                           const ArgConversionContext &Ctx);
 
-/// Prepend thread_id as first argument for GENERIC mode.
+/// Prepend the leading dyn_ptr parameter, passed as thread_id 0.
 void prependThreadId(tbird_arg_t Args[TBIRD_MAX_ARGS], uint32_t &ArgCount);
 
 } // namespace plugin

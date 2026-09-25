@@ -157,8 +157,9 @@ private:
   /// The kernel function to execute.
   void (*Func)(void);
   
-  /// Kernel-argument C types. Null: nothing in this image supplies them.
-  const uint8_t *CTypes = nullptr;
+  /// The kernel's parameter type codes, copied from <kernel>_ctypes in the
+  /// device image at init (the image buffer does not outlive the kernel's use).
+  llvm::SmallVector<uint8_t, 16> CTypes;
 
   /// Image buffer handle containing this kernel's ELF image (Phase 4)
   tbird_buffer_t image_buffer = nullptr;
@@ -810,6 +811,19 @@ Error ThunderbirdKernelTy::initImpl(GenericDeviceTy &Device, DeviceImageTy &Imag
   DP("Stored image_buffer=%p, elf_offset=%zu for kernel %s\n",
      (void*)image_buffer, kernel_elf_offset, getName());
 
+  // The parameter types the device's libffi call needs, emitted by the compiler
+  // beside the kernel. Done once here: they describe the kernel's prototype.
+  GlobalTy CTypesGlobal(std::string(getName()) + "_ctypes", 0);
+  if (auto Err = Device.Plugin.getGlobalHandler().getGlobalMetadataFromImage(
+          Device, Image, CTypesGlobal))
+    return Plugin::error(ErrorCode::INVALID_BINARY,
+                         "kernel %s has no parameter types in the image: %s",
+                         getName(), toString(std::move(Err)).c_str());
+  const uint8_t *Codes = static_cast<const uint8_t *>(CTypesGlobal.getPtr());
+  CTypes.assign(Codes, Codes + CTypesGlobal.getSize());
+  DP("Kernel %s: %zu parameter types from the image\n", getName(),
+     CTypes.size());
+
   // Functions have zero size.
   GlobalTy Global(getName(), 0);
 
@@ -910,7 +924,9 @@ Error ThunderbirdKernelTy::launchImpl(GenericDeviceTy &GenericDevice, uint32_t N
 
   // Convert OpenMP arguments to tbird format
   tbird_arg_t Args[TBIRD_MAX_ARGS];
-  ArgConversionContext Ctx{TBirdDevice->pool, KernelArgs, LaunchParams, KLEOffset, CTypes};
+  ArgConversionContext Ctx{TBirdDevice->pool, KernelArgs,
+                           LaunchParams, KLEOffset,
+                           CTypes.data(), (uint32_t)CTypes.size()};
 
   auto ArgCountOrErr = convertKernelArguments(Args, Ctx);
   if (!ArgCountOrErr)
@@ -918,10 +934,9 @@ Error ThunderbirdKernelTy::launchImpl(GenericDeviceTy &GenericDevice, uint32_t N
 
   uint32_t ArgCount = *ArgCountOrErr;
 
-  // Insert thread_id for GENERIC mode
-  if (ArgCount > 0) {
-    prependThreadId(Args, ArgCount);
-  }
+  // Every kernel's first parameter is dyn_ptr, which the device receives as
+  // thread_id 0 -- including a kernel that takes nothing else.
+  prependThreadId(Args, ArgCount);
 
   // Debug: Print final argument array
   DP("Final converted argument array for device:\n");

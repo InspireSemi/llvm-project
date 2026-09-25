@@ -6337,6 +6337,41 @@ void CGOpenMPRuntime::computeMinAndMaxThreadsAndTeams(
   }
 }
 
+/// Record a Thunderbird kernel's parameter types in the device image.
+///
+/// The Thunderbird device calls a kernel through libffi, which needs the type
+/// of every parameter to place it in the right register. Emit them beside the
+/// kernel as `<kernel>_ctypes`, one code per parameter in parameter order, read
+/// from the kernel's own signature so they describe the prototype the call must
+/// match. A parameter is a pointer or a by-copy scalar widened to i64. The
+/// codes are the plugin's (offload/plugins-nextgen/thunderbird,
+/// ArgumentConversion.h).
+static void emitThunderbirdKernelArgTypes(CodeGenModule &CGM,
+                                          llvm::Function *Kernel,
+                                          SourceLocation Loc) {
+  enum : uint8_t { Int64 = 7, Pointer = 11 };
+  SmallVector<uint8_t, 8> Codes;
+  for (const llvm::Argument &Arg : Kernel->args()) {
+    llvm::Type *Ty = Arg.getType();
+    if (Ty->isPointerTy())
+      Codes.push_back(Pointer);
+    else if (Ty->isIntegerTy(64))
+      Codes.push_back(Int64);
+    else {
+      CGM.Error(Loc, "unsupported parameter type in a Thunderbird kernel");
+      return;
+    }
+  }
+  llvm::Constant *Init =
+      llvm::ConstantDataArray::get(CGM.getLLVMContext(), Codes);
+  auto *GV = new llvm::GlobalVariable(
+      CGM.getModule(), Init->getType(), /*isConstant=*/true,
+      llvm::GlobalValue::WeakODRLinkage, Init,
+      (Kernel->getName() + "_ctypes").str());
+  GV->setVisibility(llvm::GlobalValue::ProtectedVisibility);
+  CGM.addCompilerUsedGlobal(GV);
+}
+
 void CGOpenMPRuntime::emitTargetOutlinedFunctionHelper(
     const OMPExecutableDirective &D, StringRef ParentName,
     llvm::Function *&OutlinedFn, llvm::Constant *&OutlinedFnID,
@@ -6361,6 +6396,10 @@ void CGOpenMPRuntime::emitTargetOutlinedFunctionHelper(
 
   if (!OutlinedFn)
     return;
+
+  if (CGM.getLangOpts().OpenMPIsTargetDevice &&
+      CGM.getTriple().getVendor() == llvm::Triple::Inspire)
+    emitThunderbirdKernelArgTypes(CGM, OutlinedFn, D.getBeginLoc());
 
   CGM.getTargetCodeGenInfo().setTargetAttributes(nullptr, OutlinedFn, CGM);
 
