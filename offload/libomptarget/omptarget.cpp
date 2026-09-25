@@ -2143,6 +2143,11 @@ int target(ident_t *Loc, DeviceTy &Device, void *HostPtr,
                    << TargetTable->EntriesBegin[TM->Index].SymbolName
                    << " with pointer " << TgtEntryPtr << " (index=" << TM->Index
                    << ").";
+  if (!TgtEntryPtr) {
+    REPORT() << "Kernel " << TargetTable->EntriesBegin[TM->Index].SymbolName
+             << " was not loaded on device " << DeviceId << ", abort target.";
+    return OFFLOAD_FAIL;
+  }
 
   {
     assert(KernelArgs.NumArgs == TgtArgs.size() && "Argument count mismatch!");
@@ -2233,6 +2238,11 @@ int target_replay(ident_t *Loc, DeviceTy &Device, void *HostPtr,
                    << TargetTable->EntriesBegin[TM->Index].SymbolName
                    << " with pointer " << TgtEntryPtr << " (index=" << TM->Index
                    << ").";
+  if (!TgtEntryPtr) {
+    REPORT() << "Kernel " << TargetTable->EntriesBegin[TM->Index].SymbolName
+             << " was not loaded on device " << DeviceId << ", abort target.";
+    return OFFLOAD_FAIL;
+  }
 
   void *TgtPtr = Device.allocData(DeviceMemorySize, /*HstPtr=*/nullptr,
                                   TARGET_ALLOC_DEFAULT);
