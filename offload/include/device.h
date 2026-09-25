@@ -184,6 +184,13 @@ struct DeviceTy {
     return std::get<T>(Entry->Value);
   }
 
+  /// Check whether loading this device's images failed. The device is then
+  /// unusable, and every later request for it reports the failure.
+  bool imagesFailedToLoad() const { return ImagesFailedToLoad; }
+
+  /// Record that loading this device's images failed.
+  void setImagesFailedToLoad() { ImagesFailedToLoad = true; }
+
 private:
   /// Deinitialize the device (and plugin).
   void deinit();
@@ -198,6 +205,9 @@ private:
 
   /// Flag to indicate pending images (true after construction).
   bool HasPendingImages = true;
+
+  /// Flag to indicate that loading the images failed.
+  bool ImagesFailedToLoad = false;
 };
 
 #endif
