@@ -52,7 +52,9 @@ struct ArgConversionContext {
   uint32_t NumCTypes;
 };
 
-/// Convert pointer argument ArgIdx (0-based, dyn_ptr excluded) to tbird format.
+/// Convert pointer argument ArgIdx (0-based, dyn_ptr excluded) to tbird format:
+/// TBIRD_TYPE_PTR for a value in pool memory, otherwise the value's bits as
+/// TBIRD_TYPE_INT64. Sets OutArg.type.
 Error convertPointerArgument(uint32_t ArgIdx, tbird_arg_t &OutArg,
                              const ArgConversionContext &Ctx);
 

@@ -39,17 +39,25 @@ Error convertPointerArgument(uint32_t ArgIdx, tbird_arg_t &OutArg,
                         "LaunchParams.Ptrs[%u] is NULL", PtrIndex);
   }
 
-  void *DevicePtr = *(void**)Ctx.LaunchParams.Ptrs[PtrIndex];
+  void *Value = *(void**)Ctx.LaunchParams.Ptrs[PtrIndex];
 
-  // Verify it's in buffer registry (supports interior pointers)
-  auto [buf, ofs] = Ctx.Pool.lookup(DevicePtr);
-  if (!buf) {
-    return Plugin::error(ErrorCode::UNKNOWN,
-                        "Device pointer %p not in buffer registry", DevicePtr);
+  // A value in pool memory is a device address: TBIRD_TYPE_PTR, which the
+  // platform translates to the device's mapping of the same buffer. Any other
+  // value -- NULL, or a host address with no matching mapped list item -- keeps
+  // its original value (OpenMP 5.2, 5.8.6), so it is passed as its eight bytes.
+  // A slab's end address counts as pool memory: it is refused by the platform
+  // rather than reaching the kernel untranslated.
+  if (Ctx.Pool.inSlab(Value)) {
+    OutArg.type = TBIRD_TYPE_PTR;
+    OutArg.value.ptr = Value;
+    DP("    PTR: %p (from *LaunchParams.Ptrs[%u])\n", Value, PtrIndex);
+  } else {
+    OutArg.type = TBIRD_TYPE_INT64;
+    std::memset(OutArg.value.scalar_bytes, 0, sizeof(OutArg.value.scalar_bytes));
+    std::memcpy(OutArg.value.scalar_bytes, &Value, sizeof(Value));
+    DP("    PTR %p (from *LaunchParams.Ptrs[%u]) is not in device memory; "
+       "passed by value\n", Value, PtrIndex);
   }
-
-  OutArg.value.ptr = DevicePtr;
-  DP("    PTR: %p (from *LaunchParams.Ptrs[%u])\n", DevicePtr, PtrIndex);
   return Plugin::success();
 }
 
@@ -104,7 +112,6 @@ Expected<uint32_t> convertKernelArguments(tbird_arg_t ArgsOut[TBIRD_MAX_ARGS],
     DP("  arg[%u]: code=%u\n", i, Code);
     switch (Code) {
     case KernelParamPointer:
-      ArgsOut[i].type = TBIRD_TYPE_PTR;
       if (Error Err = convertPointerArgument(i, ArgsOut[i], Ctx))
         return std::move(Err);
       break;

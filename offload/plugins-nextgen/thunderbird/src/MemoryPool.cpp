@@ -132,6 +132,16 @@ std::pair<tbird_buffer_t, size_t> MemoryPool::lookup(void *ptr) {
   return {nullptr, 0};
 }
 
+bool MemoryPool::inSlab(const void *ptr) const {
+  uintptr_t addr = (uintptr_t)ptr;
+  for (const Slab &s : slabs) {
+    uintptr_t base = (uintptr_t)s.base;
+    if (addr >= base && addr <= base + s.capacity)
+      return true;
+  }
+  return false;
+}
+
 void MemoryPool::deallocate(void *ptr) {
   auto it = allocations.find(ptr);
   if (it != allocations.end()) {

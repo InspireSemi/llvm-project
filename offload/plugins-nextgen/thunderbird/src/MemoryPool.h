@@ -69,6 +69,10 @@ struct MemoryPool {
   /// Look up which slab and offset a pointer maps to (exact + interior).
   std::pair<tbird_buffer_t, size_t> lookup(void *ptr);
 
+  /// True if ptr lies within a slab, [base, base + capacity], the end
+  /// included: the address range of pool memory, live or not.
+  bool inSlab(const void *ptr) const;
+
   /// Remove a sub-allocation from tracking.  When all sub-allocations in
   /// a slab have been deallocated, the slab's watermark resets to 0 and it
   /// becomes reusable for new bump-allocations.
