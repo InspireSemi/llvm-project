@@ -45,14 +45,17 @@ Error convertPointerArgument(uint32_t ArgIdx, tbird_arg_t &OutArg,
   // platform translates to the device's mapping of the same buffer. Any other
   // value -- NULL, or a host address with no matching mapped list item -- keeps
   // its original value (OpenMP 5.2, 5.8.6), so it is passed as its eight bytes.
-  // A slab's end address counts as pool memory: it is refused by the platform
-  // rather than reaching the kernel untranslated.
   //
   // A value in another device's pool is refused. A device pointer is valid only
   // in the data environment of the device that allocated it (OpenMP 5.2, 5.4.7,
   // 18.8.1), and the kernel would receive an address that means nothing on
   // this device. This also refuses such a value passed firstprivate and never
   // dereferenced, which 5.8.6 permits: a Thunderbird restriction.
+  //
+  // A value one past the end of a slab is in no slab, yet came from arithmetic
+  // on a device pointer; passed by value it would reach the kernel as a host
+  // address, so it is refused. Slabs are [base, base + capacity), so a value at
+  // one slab's end and another's base belongs to the second.
   int32_t Owner = -1;
   if (Ctx.Pool.inSlab(Value)) {
     OutArg.type = TBIRD_TYPE_PTR;
@@ -65,6 +68,15 @@ Error convertPointerArgument(uint32_t ArgIdx, tbird_arg_t &OutArg,
         "valid only on the device that allocated it, and this kernel runs on "
         "device %d (copy between devices with omp_target_memcpy)",
         ArgIdx, Value, Owner, Ctx.DeviceId);
+  } else if (Ctx.Pool.atSlabEnd(Value) ||
+             (Ctx.Registry && Ctx.Registry->endOwner(Value) >= 0)) {
+    int32_t EndOwner =
+        Ctx.Pool.atSlabEnd(Value) ? Ctx.DeviceId : Ctx.Registry->endOwner(Value);
+    return Plugin::error(
+        ErrorCode::INVALID_ARGUMENT,
+        "kernel argument %u is %p, one past the end of device %d's memory, not "
+        "an address in it; this kernel runs on device %d",
+        ArgIdx, Value, EndOwner, Ctx.DeviceId);
   } else {
     OutArg.type = TBIRD_TYPE_INT64;
     std::memset(OutArg.value.scalar_bytes, 0, sizeof(OutArg.value.scalar_bytes));

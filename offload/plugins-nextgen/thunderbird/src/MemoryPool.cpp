@@ -29,7 +29,16 @@ int32_t SlabRegistry::owner(const void *ptr) const {
   uintptr_t addr = (uintptr_t)ptr;
   std::lock_guard<std::mutex> lock(mutex);
   for (const Entry &e : entries)
-    if (addr >= e.base && addr <= e.base + e.capacity)
+    if (addr >= e.base && addr < e.base + e.capacity)
+      return e.device;
+  return -1;
+}
+
+int32_t SlabRegistry::endOwner(const void *ptr) const {
+  uintptr_t addr = (uintptr_t)ptr;
+  std::lock_guard<std::mutex> lock(mutex);
+  for (const Entry &e : entries)
+    if (addr == e.base + e.capacity)
       return e.device;
   return -1;
 }
@@ -162,9 +171,17 @@ bool MemoryPool::inSlab(const void *ptr) const {
   uintptr_t addr = (uintptr_t)ptr;
   for (const Slab &s : slabs) {
     uintptr_t base = (uintptr_t)s.base;
-    if (addr >= base && addr <= base + s.capacity)
+    if (addr >= base && addr < base + s.capacity)
       return true;
   }
+  return false;
+}
+
+bool MemoryPool::atSlabEnd(const void *ptr) const {
+  uintptr_t addr = (uintptr_t)ptr;
+  for (const Slab &s : slabs)
+    if (addr == (uintptr_t)s.base + s.capacity)
+      return true;
   return false;
 }
 

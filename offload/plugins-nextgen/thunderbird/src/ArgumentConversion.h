@@ -58,7 +58,8 @@ struct ArgConversionContext {
 
 /// Convert pointer argument ArgIdx (0-based, dyn_ptr excluded) to tbird format:
 /// TBIRD_TYPE_PTR for a value in this device's pool memory, an error for a
-/// value in another device's, otherwise the value's bits as TBIRD_TYPE_INT64.
+/// value in another device's or one past the end of a slab, otherwise the
+/// value's bits as TBIRD_TYPE_INT64.
 /// Sets OutArg.type.
 Error convertPointerArgument(uint32_t ArgIdx, tbird_arg_t &OutArg,
                              const ArgConversionContext &Ctx);

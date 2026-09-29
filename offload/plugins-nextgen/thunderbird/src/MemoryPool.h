@@ -45,9 +45,11 @@ struct SlabRegistry {
   /// Remove every slab of device.
   void removeDevice(int32_t device);
 
-  /// The device whose slab contains ptr, [base, base + capacity] with the end
-  /// included as in MemoryPool::inSlab, or -1.
+  /// The device whose slab contains ptr, [base, base + capacity), or -1.
   int32_t owner(const void *ptr) const;
+
+  /// The device whose slab ends exactly at ptr (base + capacity), or -1.
+  int32_t endOwner(const void *ptr) const;
 
 private:
   mutable std::mutex mutex;
@@ -98,9 +100,12 @@ struct MemoryPool {
   /// Look up which slab and offset a pointer maps to (exact + interior).
   std::pair<tbird_buffer_t, size_t> lookup(void *ptr);
 
-  /// True if ptr lies within a slab, [base, base + capacity], the end
-  /// included: the address range of pool memory, live or not.
+  /// True if ptr lies within a slab, [base, base + capacity): the address
+  /// range of pool memory, live or not.
   bool inSlab(const void *ptr) const;
+
+  /// True if ptr is exactly one past the end of a slab.
+  bool atSlabEnd(const void *ptr) const;
 
   /// Remove a sub-allocation from tracking.  When all sub-allocations in
   /// a slab have been deallocated, the slab's watermark resets to 0 and it
