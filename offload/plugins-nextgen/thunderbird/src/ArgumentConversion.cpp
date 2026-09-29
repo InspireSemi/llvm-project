@@ -47,10 +47,24 @@ Error convertPointerArgument(uint32_t ArgIdx, tbird_arg_t &OutArg,
   // its original value (OpenMP 5.2, 5.8.6), so it is passed as its eight bytes.
   // A slab's end address counts as pool memory: it is refused by the platform
   // rather than reaching the kernel untranslated.
+  //
+  // A value in another device's pool is refused. A device pointer is valid only
+  // in the data environment of the device that allocated it (OpenMP 5.2, 5.4.7,
+  // 18.8.1), and the kernel would receive an address that means nothing on
+  // this device. This also refuses such a value passed firstprivate and never
+  // dereferenced, which 5.8.6 permits: a Thunderbird restriction.
+  int32_t Owner = -1;
   if (Ctx.Pool.inSlab(Value)) {
     OutArg.type = TBIRD_TYPE_PTR;
     OutArg.value.ptr = Value;
     DP("    PTR: %p (from *LaunchParams.Ptrs[%u])\n", Value, PtrIndex);
+  } else if (Ctx.Registry && (Owner = Ctx.Registry->owner(Value)) >= 0) {
+    return Plugin::error(
+        ErrorCode::INVALID_ARGUMENT,
+        "kernel argument %u is %p, device %d's memory; a device pointer is "
+        "valid only on the device that allocated it, and this kernel runs on "
+        "device %d (copy between devices with omp_target_memcpy)",
+        ArgIdx, Value, Owner, Ctx.DeviceId);
   } else {
     OutArg.type = TBIRD_TYPE_INT64;
     std::memset(OutArg.value.scalar_bytes, 0, sizeof(OutArg.value.scalar_bytes));

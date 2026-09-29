@@ -25,9 +25,34 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 #include <unordered_map>
 #include <utility>
 #include <vector>
+
+/// The slabs of every device's pool, so that a value can be attributed to
+/// the device whose memory it is. Shared across the devices' threads, hence
+/// the lock; a pool touches it only when it creates or frees slabs.
+struct SlabRegistry {
+  struct Entry {
+    uintptr_t base;
+    size_t capacity;
+    int32_t device;
+  };
+
+  void add(const void *base, size_t capacity, int32_t device);
+
+  /// Remove every slab of device.
+  void removeDevice(int32_t device);
+
+  /// The device whose slab contains ptr, [base, base + capacity] with the end
+  /// included as in MemoryPool::inSlab, or -1.
+  int32_t owner(const void *ptr) const;
+
+private:
+  mutable std::mutex mutex;
+  std::vector<Entry> entries;
+};
 
 struct MemoryPool {
   static constexpr size_t INITIAL_SLAB_SIZE = 64 * 1024;  // 64 KB
@@ -60,8 +85,12 @@ struct MemoryPool {
   std::vector<Slab> slabs;
   size_t total_pages = 0;
   std::unordered_map<void *, SubAlloc> allocations;
+  SlabRegistry *registry = nullptr;
+  int32_t device = -1;
 
-  void init(tbird_context_t context);
+  /// registry, if given, records this pool's slabs as device's memory.
+  void init(tbird_context_t context, SlabRegistry *reg = nullptr,
+            int32_t device_id = -1);
 
   /// Bump-allocate `size` bytes. Returns host VA usable as OpenMP "device ptr".
   void *allocate(size_t size);

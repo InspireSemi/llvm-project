@@ -114,6 +114,15 @@ static const std::vector<std::string> &getThunderbirdDevicePaths() {
   return paths;
 }
 
+/// The slabs of every device's memory pool, for recognising a kernel argument
+/// that is another device's memory. One per process, as the plugin is; never
+/// destroyed, so a device deinitialised during process exit can still remove
+/// its slabs.
+static SlabRegistry &getSlabRegistry() {
+  static SlabRegistry *registry = new SlabRegistry();
+  return *registry;
+}
+
 /// Glue: look paths up by DeviceId and call into the Topology module's
 /// pure predicate. The string-prefix logic lives in Topology.cpp where
 /// it's unit-testable in isolation; this wrapper just resolves int IDs
@@ -242,7 +251,7 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     
     DP("SUCCESS: Thunderbird context initialized: ctx=%p\n", (void*)ctx);
 
-    pool.init(ctx);
+    pool.init(ctx, &getSlabRegistry(), DeviceId);
     DP("Memory pool initialized\n");
 
     DP("=== Phase 2/3: initImpl COMPLETE ===\n");
@@ -926,7 +935,8 @@ Error ThunderbirdKernelTy::launchImpl(GenericDeviceTy &GenericDevice, uint32_t N
   tbird_arg_t Args[TBIRD_MAX_ARGS];
   ArgConversionContext Ctx{TBirdDevice->pool, KernelArgs,
                            LaunchParams, KLEOffset,
-                           CTypes.data(), (uint32_t)CTypes.size()};
+                           CTypes.data(), (uint32_t)CTypes.size(),
+                           &getSlabRegistry(), GenericDevice.getDeviceId()};
 
   auto ArgCountOrErr = convertKernelArguments(Args, Ctx);
   if (!ArgCountOrErr)

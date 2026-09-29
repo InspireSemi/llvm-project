@@ -13,9 +13,33 @@
 #include <cstdio>
 #include <cstring>
 
-void MemoryPool::init(tbird_context_t context) {
+void SlabRegistry::add(const void *base, size_t capacity, int32_t device) {
+  std::lock_guard<std::mutex> lock(mutex);
+  entries.push_back({(uintptr_t)base, capacity, device});
+}
+
+void SlabRegistry::removeDevice(int32_t device) {
+  std::lock_guard<std::mutex> lock(mutex);
+  entries.erase(std::remove_if(entries.begin(), entries.end(),
+                               [&](const Entry &e) { return e.device == device; }),
+                entries.end());
+}
+
+int32_t SlabRegistry::owner(const void *ptr) const {
+  uintptr_t addr = (uintptr_t)ptr;
+  std::lock_guard<std::mutex> lock(mutex);
+  for (const Entry &e : entries)
+    if (addr >= e.base && addr <= e.base + e.capacity)
+      return e.device;
+  return -1;
+}
+
+void MemoryPool::init(tbird_context_t context, SlabRegistry *reg,
+                      int32_t device_id) {
   ctx = context;
   total_pages = 0;
+  registry = reg;
+  device = device_id;
 }
 
 void *MemoryPool::allocate(size_t size) {
@@ -97,6 +121,8 @@ void *MemoryPool::allocate(size_t size) {
   bool is_exclusive = (slab_size > INITIAL_SLAB_SIZE);
   slabs.push_back({buf, base, slab_size, 0, 0, is_exclusive});
   total_pages += data_pages + pt_pages;
+  if (registry)
+    registry->add(base, slab_size, device);
 
   // Always print slab creation — visible in session log even without
   // LIBOMPTARGET_DEBUG=1, critical for diagnosing budget exhaustion.
@@ -157,6 +183,8 @@ void MemoryPool::deallocate(void *ptr) {
 
 void MemoryPool::destroy() {
   if (!ctx) return;
+  if (registry)
+    registry->removeDevice(device);
   for (auto &slab : slabs)
     tbird_free_buffer(ctx, slab.buffer);
   slabs.clear();

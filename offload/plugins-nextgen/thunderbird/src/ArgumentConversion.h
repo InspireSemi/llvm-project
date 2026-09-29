@@ -50,11 +50,16 @@ struct ArgConversionContext {
   /// the argument whose value is in LaunchParams.Ptrs[k - 1 + KLEOffset].
   const uint8_t *CTypes;
   uint32_t NumCTypes;
+  /// Every device's slabs, to recognise another device's memory; may be null.
+  const SlabRegistry *Registry;
+  /// The device the kernel runs on.
+  int32_t DeviceId;
 };
 
 /// Convert pointer argument ArgIdx (0-based, dyn_ptr excluded) to tbird format:
-/// TBIRD_TYPE_PTR for a value in pool memory, otherwise the value's bits as
-/// TBIRD_TYPE_INT64. Sets OutArg.type.
+/// TBIRD_TYPE_PTR for a value in this device's pool memory, an error for a
+/// value in another device's, otherwise the value's bits as TBIRD_TYPE_INT64.
+/// Sets OutArg.type.
 Error convertPointerArgument(uint32_t ArgIdx, tbird_arg_t &OutArg,
                              const ArgConversionContext &Ctx);
 
