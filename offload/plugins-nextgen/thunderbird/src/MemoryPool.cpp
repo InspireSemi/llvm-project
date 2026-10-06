@@ -18,11 +18,13 @@
 using namespace llvm::offload::debug;
 
 void MemoryPool::init(tbird_context_t context) {
+  std::lock_guard<std::mutex> Guard(Lock);
   ctx = context;
   total_pages = 0;
 }
 
 void *MemoryPool::allocate(size_t size) {
+  std::lock_guard<std::mutex> Guard(Lock);
   size_t aligned = (size + ALIGNMENT - 1) & ~(ALIGNMENT - 1);
 
   // Try existing slabs (prefer most-recently-created, scan backwards).
@@ -122,6 +124,7 @@ void *MemoryPool::allocate(size_t size) {
 }
 
 std::pair<tbird_buffer_t, size_t> MemoryPool::lookup(void *ptr) {
+  std::lock_guard<std::mutex> Guard(Lock);
   // Fast: exact match
   auto it = allocations.find(ptr);
   if (it != allocations.end()) {
@@ -139,6 +142,7 @@ std::pair<tbird_buffer_t, size_t> MemoryPool::lookup(void *ptr) {
 }
 
 void MemoryPool::deallocate(void *ptr) {
+  std::lock_guard<std::mutex> Guard(Lock);
   auto it = allocations.find(ptr);
   if (it != allocations.end()) {
     size_t idx = it->second.slab_idx;
@@ -151,6 +155,7 @@ void MemoryPool::deallocate(void *ptr) {
 }
 
 void MemoryPool::destroy() {
+  std::lock_guard<std::mutex> Guard(Lock);
   if (!ctx) return;
   for (auto &slab : slabs)
     tbird_free_buffer(ctx, slab.buffer);
@@ -158,4 +163,9 @@ void MemoryPool::destroy() {
   allocations.clear();
   total_pages = 0;
   ODBG(OLDT_Alloc) << "POOL: destroyed all slabs";
+}
+
+size_t MemoryPool::liveAllocations() const {
+  std::lock_guard<std::mutex> Guard(Lock);
+  return allocations.size();
 }

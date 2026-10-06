@@ -15,7 +15,15 @@
 // buffer and an offset (lookup). The pool is grow-only; slabs are freed in
 // destroy() at device shutdown.
 //
-// NOTE: not thread-safe — the Thunderbird RTL uses a single mailbox.
+// Thread safety: every member function takes the pool's lock for its whole
+// body, so one device's pool may be used from several host threads at once, as
+// OpenMP allows. A device address returned by allocate() or a {buffer, offset}
+// returned by lookup() stays valid until that allocation is deallocated;
+// slabs are reused, never released, before destroy(). allocate() and
+// destroy() call the library on the device's context -- tbird_alloc_buffer()
+// exchanges a message on the device's mailbox -- so callers serialise them
+// with their other calls on that context; the pool itself never takes the
+// caller's lock (lock order: the caller's, then the pool's).
 //
 //===----------------------------------------------------------------------===//
 
@@ -27,6 +35,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -79,6 +88,12 @@ struct MemoryPool {
 
   /// Free all slabs. Call from deinitImpl().
   void destroy();
+
+  /// Number of live sub-allocations.
+  size_t liveAllocations() const;
+
+  /// Guards every member above; see the thread-safety note at the top.
+  mutable std::mutex Lock;
 };
 
 #endif // THUNDERBIRD_MEMORYPOOL_H

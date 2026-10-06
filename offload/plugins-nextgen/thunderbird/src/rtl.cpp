@@ -277,6 +277,7 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
 
   /// Deinitialize the device — release all pool slabs.
   Error deinitImpl() override {
+    std::lock_guard<std::mutex> Lock(MailboxMutex);
     pool.destroy();
     return Plugin::success();
   }
@@ -451,7 +452,7 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
           return nullptr;
         }
 
-        ODBG(OLDT_Alloc) << llvm::format("SUCCESS: pool.allocate(%zu) → %p (now %zu tracked)", Size, ptr, pool.allocations.size());
+        ODBG(OLDT_Alloc) << llvm::format("SUCCESS: pool.allocate(%zu) → %p (now %zu tracked)", Size, ptr, pool.liveAllocations());
         return ptr;
       }
     case TARGET_ALLOC_HOST:
@@ -471,7 +472,7 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     case TARGET_ALLOC_DEVICE:
     case TARGET_ALLOC_SHARED:
       pool.deallocate(TgtPtr);
-      ODBG(OLDT_Alloc) << llvm::format("SUCCESS: pool.deallocate(%p) (now %zu tracked)", TgtPtr, pool.allocations.size());
+      ODBG(OLDT_Alloc) << llvm::format("SUCCESS: pool.deallocate(%p) (now %zu tracked)", TgtPtr, pool.liveAllocations());
       return Plugin::success();
     case TARGET_ALLOC_HOST:
       std::free(TgtPtr);
@@ -517,11 +518,12 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
   }
   
   // Look up buffer handle (supports interior pointers)
-  ODBG(OLDT_DataTransfer) << llvm::format("Looking up TgtPtr in pool (%zu tracked)", pool.allocations.size());
+  ODBG(OLDT_DataTransfer) << llvm::format("Looking up TgtPtr in pool (%zu tracked)", pool.liveAllocations());
   auto [buffer, offset] = findContainingBuffer(TgtPtr);
   if (!buffer)
     return copyImageMemory(/*ToDevice=*/true, TgtPtr, const_cast<void *>(HstPtr),
                            Size, "dataSubmit");
+  std::lock_guard<std::mutex> Lock(MailboxMutex);
 
   ODBG(OLDT_DataTransfer) << llvm::format("Found buffer=%p for TgtPtr=%p (offset=%zu)", (void*)buffer, TgtPtr, offset);
 
@@ -561,11 +563,12 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     }
     
     // Look up buffer handle (supports interior pointers)
-    ODBG(OLDT_DataTransfer) << llvm::format("Looking up TgtPtr in pool (%zu tracked)", pool.allocations.size());
+    ODBG(OLDT_DataTransfer) << llvm::format("Looking up TgtPtr in pool (%zu tracked)", pool.liveAllocations());
     auto [buffer, offset] = findContainingBuffer(const_cast<void*>(TgtPtr));
     if (!buffer)
       return copyImageMemory(/*ToDevice=*/false, TgtPtr, HstPtr, Size,
                              "dataRetrieve");
+    std::lock_guard<std::mutex> Lock(MailboxMutex);
 
     ODBG(OLDT_DataTransfer) << llvm::format("Found buffer=%p for TgtPtr=%p (offset=%zu)", (void*)buffer, TgtPtr, offset);
 
@@ -610,6 +613,7 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     if (!buffer)
       return copyImageMemory(/*ToDevice=*/true, TgtPtr, Fill.data(), Size,
                              "dataFill");
+    std::lock_guard<std::mutex> Lock(MailboxMutex);
     if (tbird_buffer_write(ctx, buffer, offset, Fill.data(), Size) !=
         TBIRD_SUCCESS)
       return Plugin::error(ErrorCode::UNKNOWN, "tbird_buffer_write failed: %s",
@@ -733,6 +737,9 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
   /// a device copy and a kernel launch. A request and its reply occupy the
   /// same page, so two in flight would overwrite each other. A launch holds it
   /// for the kernel's duration, as the device serves one request at a time.
+  /// It also guards the device's context: the library keeps the context's
+  /// error text and buffer table without a lock, so every call on ctx after
+  /// initImpl -- buffer reads and writes included -- is made holding it.
   std::mutex MailboxMutex;
 
   /// Copy Size bytes between host memory and device memory outside the pool,
