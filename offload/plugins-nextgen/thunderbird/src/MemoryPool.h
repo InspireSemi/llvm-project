@@ -36,6 +36,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
+#include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -74,8 +75,9 @@ struct MemoryPool {
 
   void init(tbird_context_t context);
 
-  /// Bump-allocate `size` bytes. Returns the device address of the allocation.
-  void *allocate(size_t size);
+  /// Bump-allocate `size` bytes. Returns the device address of the allocation,
+  /// or nullptr with the reason in `*Why` when it is given.
+  void *allocate(size_t size, std::string *Why = nullptr);
 
   /// The slab buffer and offset a device address falls in, within a live
   /// sub-allocation (exact or interior); {nullptr, 0} if none.
@@ -86,7 +88,8 @@ struct MemoryPool {
   /// becomes reusable for new bump-allocations.
   void deallocate(void *ptr);
 
-  /// Free all slabs. Call from deinitImpl().
+  /// Free all slabs and detach from the context; allocate() then refuses.
+  /// Call from deinitImpl().
   void destroy();
 
   /// Number of live sub-allocations.

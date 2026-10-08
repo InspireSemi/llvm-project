@@ -275,10 +275,17 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     return Plugin::success();
   }
 
-  /// Deinitialize the device — release all pool slabs.
+  /// Deinitialize the device: release the pool's slabs and close the context.
+  /// The generic layer has unloaded the images and freed the remaining
+  /// allocations by now, and makes no further calls on this device.
   Error deinitImpl() override {
     std::lock_guard<std::mutex> Lock(MailboxMutex);
     pool.destroy();
+    StagingPtr = nullptr;
+    StagingBuf = nullptr;
+    StagingOff = 0;
+    tbird_cleanup(ctx);
+    ctx = nullptr;
     return Plugin::success();
   }
 
@@ -370,13 +377,12 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     std::lock_guard<std::mutex> Lock(MailboxMutex);
 
     ODBG(OLDT_Module) << llvm::format("POOL: allocating image buffer: %zu bytes", ImageSize);
-    void *img_ptr = pool.allocate(ImageSize);
-    if (!img_ptr) {
-      ODBG(OLDT_Module) << llvm::format("ERROR: pool.allocate failed for image (%zu bytes)", ImageSize);
+    std::string Why;
+    void *img_ptr = pool.allocate(ImageSize, &Why);
+    if (!img_ptr)
       return Discard(Plugin::error(ErrorCode::OUT_OF_RESOURCES,
-                                   "pool.allocate failed for image (%zu bytes)",
-                                   ImageSize));
-    }
+                                   "no device memory for the image (%zu bytes): %s",
+                                   ImageSize, Why.c_str()));
 
     // Resolve slab buffer and offset for this sub-allocation
     auto [image_buf, elf_off] = pool.lookup(img_ptr);
@@ -446,9 +452,10 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
         }
 
         std::lock_guard<std::mutex> Lock(MailboxMutex);
-        void *ptr = pool.allocate(Size);
+        std::string Why;
+        void *ptr = pool.allocate(Size, &Why);
         if (!ptr) {
-          ODBG(OLDT_Alloc) << llvm::format("ERROR: pool.allocate(%zu) failed", Size);
+          ODBG(OLDT_Alloc) << llvm::format("ERROR: pool.allocate(%zu) failed: %s", Size, Why.c_str());
           return nullptr;
         }
 
@@ -752,11 +759,12 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
       return Plugin::success();
     std::lock_guard<std::mutex> Lock(MailboxMutex);
     if (!StagingPtr) {
-      StagingPtr = pool.allocate(STAGING_SIZE);
+      std::string Why;
+      StagingPtr = pool.allocate(STAGING_SIZE, &Why);
       if (!StagingPtr)
         return Plugin::error(ErrorCode::OUT_OF_RESOURCES,
                              "%s: no staging memory for a device copy: %s", Op,
-                             tbird_last_error(ctx));
+                             Why.c_str());
       std::tie(StagingBuf, StagingOff) = pool.lookup(StagingPtr);
     }
     char *Host = static_cast<char *>(HstPtr);

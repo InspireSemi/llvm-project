@@ -11,11 +11,22 @@
 #include "llvm/Support/Format.h"
 
 #include <algorithm>
+#include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 
 using namespace llvm::offload::debug;
+
+/// printf-style formatting into a std::string, for allocation refusals.
+static std::string formatReason(const char *Fmt, ...) {
+  char Buf[160];
+  va_list Args;
+  va_start(Args, Fmt);
+  vsnprintf(Buf, sizeof(Buf), Fmt, Args);
+  va_end(Args);
+  return Buf;
+}
 
 void MemoryPool::init(tbird_context_t context) {
   std::lock_guard<std::mutex> Guard(Lock);
@@ -23,8 +34,16 @@ void MemoryPool::init(tbird_context_t context) {
   total_pages = 0;
 }
 
-void *MemoryPool::allocate(size_t size) {
+void *MemoryPool::allocate(size_t size, std::string *Why) {
   std::lock_guard<std::mutex> Guard(Lock);
+  auto Refuse = [&](const std::string &Reason) -> void * {
+    ODBG(OLDT_Alloc) << "POOL ERROR: " << Reason;
+    if (Why)
+      *Why = Reason;
+    return nullptr;
+  };
+  if (!ctx)
+    return Refuse("pool not initialised");
   size_t aligned = (size + ALIGNMENT - 1) & ~(ALIGNMENT - 1);
 
   // Try existing slabs (prefer most-recently-created, scan backwards).
@@ -70,34 +89,30 @@ void *MemoryPool::allocate(size_t size) {
   slab_size = (slab_size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
   if (slab_size > TBIRD_MAX_BUFFER_SIZE)
     slab_size = TBIRD_MAX_BUFFER_SIZE;
-  if (aligned > TBIRD_MAX_BUFFER_SIZE) {
-    ODBG(OLDT_Alloc) << llvm::format("POOL ERROR: allocation %zu exceeds TBIRD_MAX_BUFFER_SIZE (%d)", size, TBIRD_MAX_BUFFER_SIZE);
-    return nullptr;
-  }
+  if (aligned > TBIRD_MAX_BUFFER_SIZE)
+    return Refuse(formatReason("allocation %zu exceeds TBIRD_MAX_BUFFER_SIZE (%d)",
+                               size, TBIRD_MAX_BUFFER_SIZE));
 
   // Page budget check (data pages + page-table pages)
   size_t data_pages = slab_size / PAGE_SIZE;
   size_t pt_pages = (data_pages + 510) / 511;
-  if (total_pages + data_pages + pt_pages > MAX_POOL_PAGES) {
-    ODBG(OLDT_Alloc) << llvm::format("POOL ERROR: BAR budget exceeded (%zu + %zu + %zu > %zu)", total_pages, data_pages, pt_pages, MAX_POOL_PAGES);
-    return nullptr;
-  }
+  if (total_pages + data_pages + pt_pages > MAX_POOL_PAGES)
+    return Refuse(formatReason("BAR budget exceeded (%zu + %zu + %zu > %zu pages)",
+                               total_pages, data_pages, pt_pages, MAX_POOL_PAGES));
 
   ODBG(OLDT_Alloc) << llvm::format("POOL: allocating new slab: %zu bytes (%zu pages)", slab_size, data_pages);
   tbird_buffer_t buf = tbird_alloc_buffer(ctx, slab_size);
-  if (!buf) {
-    ODBG(OLDT_Alloc) << llvm::format("POOL ERROR: tbird_alloc_buffer(%zu) failed: %s", slab_size, tbird_last_error(ctx));
-    return nullptr;
-  }
+  if (!buf)
+    return Refuse(formatReason("tbird_alloc_buffer(%zu) failed: %s", slab_size,
+                               tbird_last_error(ctx)));
 
   // The address the device mapped the slab at (reported when the buffer was
   // allocated). Sub-allocations are handed to libomptarget as device pointers,
   // so they must be addresses the kernels can use as they are.
   void *base = (void *)(uintptr_t)tbird_buffer_device_addr(buf);
   if (!base) {
-    ODBG(OLDT_Alloc) << "POOL ERROR: slab has no device address";
     tbird_free_buffer(ctx, buf);
-    return nullptr;
+    return Refuse("slab has no device address");
   }
   // Mark the slab exclusive iff it was upsized past INITIAL_SLAB_SIZE for
   // this one allocation.  That matches the big-one-shot-tenant pattern
@@ -162,6 +177,7 @@ void MemoryPool::destroy() {
   slabs.clear();
   allocations.clear();
   total_pages = 0;
+  ctx = nullptr;
   ODBG(OLDT_Alloc) << "POOL: destroyed all slabs";
 }
 
