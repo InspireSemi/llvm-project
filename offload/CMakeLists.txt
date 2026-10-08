@@ -139,7 +139,8 @@ if (NOT LIBOMPTARGET_LLVM_INCLUDE_DIRS)
 endif()
 
 if(DEFINED LIBOMPTARGET_BUILD_CUDA_PLUGIN OR
-   DEFINED LIBOMPTARGET_BUILD_AMDGPU_PLUGIN)
+   DEFINED LIBOMPTARGET_BUILD_AMDGPU_PLUGIN OR
+   DEFINED LIBOMPTARGET_BUILD_THUNDERBIRD_PLUGIN)
   message(WARNING "Option removed, use 'LIBOMPTARGET_PLUGINS_TO_BUILD' instead")
 endif()
 
@@ -159,9 +160,9 @@ if(WIN32)
     endif()
   endforeach()
 else()
-  set(LIBOMPTARGET_ALL_PLUGIN_TARGETS amdgpu cuda)
+  set(LIBOMPTARGET_ALL_PLUGIN_TARGETS amdgpu cuda thunderbird)
   set(LIBOMPTARGET_PLUGINS_TO_BUILD "all" CACHE STRING
-      "Semicolon-separated list of plugins to use: cuda, amdgpu or \"all\".")
+      "Semicolon-separated list of plugins to use: cuda, amdgpu, thunderbird or \"all\".")
 
   if(LIBOMPTARGET_PLUGINS_TO_BUILD STREQUAL "all")
     set(LIBOMPTARGET_PLUGINS_TO_BUILD ${LIBOMPTARGET_ALL_PLUGIN_TARGETS})
@@ -182,6 +183,11 @@ if(NOT (CMAKE_SYSTEM_PROCESSOR MATCHES "(x86_64)|(ppc64le)|(aarch64)$"
     message(STATUS "Not building CUDA plugin: only support CUDA in "
                    "Linux x86_64, ppc64le, or aarch64 hosts")
     list(REMOVE_ITEM LIBOMPTARGET_PLUGINS_TO_BUILD "cuda")
+  endif()
+  if("thunderbird" IN_LIST LIBOMPTARGET_PLUGINS_TO_BUILD)
+    message(STATUS "Not building THUNDERBIRD plugin: only support THUNDERBIRD in "
+                   "Linux x86_64, ppc64le, or aarch64 hosts")
+    list(REMOVE_ITEM LIBOMPTARGET_PLUGINS_TO_BUILD "thunderbird")
   endif()
 endif()
 if(NOT (CMAKE_SYSTEM_PROCESSOR MATCHES "(x86_64)|(AMD64)$" AND
@@ -231,6 +237,8 @@ set (LIBOMPTARGET_ALL_TARGETS "${LIBOMPTARGET_ALL_TARGETS} riscv64-unknown-linux
 set (LIBOMPTARGET_ALL_TARGETS "${LIBOMPTARGET_ALL_TARGETS} loongarch64-unknown-linux-gnu")
 set (LIBOMPTARGET_ALL_TARGETS "${LIBOMPTARGET_ALL_TARGETS} loongarch64-unknown-linux-gnu-LTO")
 set (LIBOMPTARGET_ALL_TARGETS "${LIBOMPTARGET_ALL_TARGETS} spirv64-intel")
+set (LIBOMPTARGET_ALL_TARGETS "${LIBOMPTARGET_ALL_TARGETS} riscv64-inspire-linux-gnu")
+set (LIBOMPTARGET_ALL_TARGETS "${LIBOMPTARGET_ALL_TARGETS} riscv64-inspire-linux-gnu-LTO")
 
 # Once the plugins for the different targets are validated, they will be added to
 # the list of supported targets in the current system.
