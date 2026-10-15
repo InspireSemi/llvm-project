@@ -139,7 +139,7 @@ private:
   /// The kernel function to execute.
   void (*Func)(void);
 
-  /// Image buffer handle containing this kernel's ELF image (Phase 4)
+  /// Image buffer handle containing this kernel's ELF image
   tbird_buffer_t image_buffer = nullptr;
   /// Offset of ELF image within pool slab
   size_t kernel_elf_offset = 0;
@@ -159,7 +159,7 @@ struct ThunderbirdDeviceImageTy : public DeviceImageTy {
                            std::unique_ptr<MemoryBuffer> &&Image)
       : DeviceImageTy(ImageId, Device, std::move(Image)) {}
 
-  /// Buffer handle for loaded image (Phase 3 migration)
+  /// Buffer handle for the loaded image
   tbird_buffer_t image_buffer = nullptr;
   /// Offset of ELF image within the pool slab (for elf_offset in kernel launch)
   size_t elf_offset = 0;
@@ -181,7 +181,7 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
 
   /// Initialize the device
   Error initImpl(GenericPluginTy &Plugin) override {
-    ODBG(OLDT_Init) << llvm::format("=== Phase 2/3: initImpl START (DeviceId=%d) ===", DeviceId);
+    ODBG(OLDT_Init) << llvm::format("=== initImpl START (DeviceId=%d) ===", DeviceId);
 
     // Per-DeviceId path lookup. Plugin-level discovery already populated
     // the cached path list; index by DeviceId. Bounds check is a sanity
@@ -220,7 +220,7 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     pool.init(ctx);
     ODBG(OLDT_Init) << "Memory pool initialized";
 
-    ODBG(OLDT_Init) << "=== Phase 2/3: initImpl COMPLETE ===";
+    ODBG(OLDT_Init) << "=== initImpl COMPLETE ===";
     fprintf(stderr, "[THUNDERBIRD RTL] Device initImpl COMPLETE\n");
     fflush(stderr);
     return Plugin::success();
@@ -230,7 +230,7 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
   ///
   /// Unload the binary image and free associated resources
   Error unloadBinaryImpl(DeviceImageTy *Image) override {
-    ODBG(OLDT_Module) << "=== Phase 3: unloadBinaryImpl START ===";
+    ODBG(OLDT_Module) << "=== unloadBinaryImpl START ===";
     
     auto TBirdImage = reinterpret_cast<ThunderbirdDeviceImageTy *>(Image);
     
@@ -254,7 +254,7 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     TBirdImage->~ThunderbirdDeviceImageTy();
     Plugin.free(TBirdImage);
     
-    ODBG(OLDT_Module) << "=== Phase 3: unloadBinaryImpl COMPLETE ===";
+    ODBG(OLDT_Module) << "=== unloadBinaryImpl COMPLETE ===";
 
     return Plugin::success();
   }
@@ -297,7 +297,7 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
   Expected<DeviceImageTy *>
   loadBinaryImpl(std::unique_ptr<MemoryBuffer> &&TgtImage,
                  int32_t ImageId) override {
-    ODBG(OLDT_Module) << llvm::format("=== Phase 3: loadBinaryImpl START (ImageId=%d) ===", ImageId);
+    ODBG(OLDT_Module) << llvm::format("=== loadBinaryImpl START (ImageId=%d) ===", ImageId);
     fprintf(stderr, "[THUNDERBIRD RTL] loadBinaryImpl called (ImageId=%d)\n", ImageId);
     fflush(stderr);
     
@@ -400,7 +400,7 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     Image->image_size = ImageSize;
     Image->LoadBase = LoadBase;
     ODBG(OLDT_Module) << llvm::format("SUCCESS: image of %zu bytes at buffer=%p, elf_offset=%zu, loaded on the device at base 0x%lx", ImageSize, (void*)image_buf, elf_off, (unsigned long)LoadBase);
-    ODBG(OLDT_Module) << "=== Phase 3: loadBinaryImpl COMPLETE ===";
+    ODBG(OLDT_Module) << "=== loadBinaryImpl COMPLETE ===";
     
     return Image;
   }
@@ -409,7 +409,7 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
   /// pool (device addresses); host allocations from std::malloc.
   Expected<void *> allocate(size_t Size, void *, TargetAllocTy Kind,
                             size_t Alignment) override {
-    ODBG(OLDT_Alloc) << llvm::format("=== Phase 2: allocate(Size=%zu, Kind=%d, Alignment=%zu) ===", Size, (int)Kind, Alignment);
+    ODBG(OLDT_Alloc) << llvm::format("=== allocate(Size=%zu, Kind=%d, Alignment=%zu) ===", Size, (int)Kind, Alignment);
 
     // Both the pool and std::malloc return MemoryPool::ALIGNMENT-aligned memory
     // and nothing stronger; a larger alignment is refused rather than ignored.
@@ -491,7 +491,7 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
 
   Error dataSubmitImpl(void *TgtPtr, const void *HstPtr, int64_t Size,
                       AsyncInfoWrapperTy &AsyncInfoWrapper) override {
-  ODBG(OLDT_DataTransfer) << llvm::format("=== Phase 2: dataSubmit(TgtPtr=%p, HstPtr=%p, Size=%ld) ===", TgtPtr, HstPtr, Size);
+  ODBG(OLDT_DataTransfer) << llvm::format("=== dataSubmit(TgtPtr=%p, HstPtr=%p, Size=%ld) ===", TgtPtr, HstPtr, Size);
   
   // Validate inputs
   if (!ctx) {
@@ -536,7 +536,7 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
   /// Retrieve data from the device (device to host transfer).
   Error dataRetrieveImpl(void *HstPtr, const void *TgtPtr, int64_t Size,
                          AsyncInfoWrapperTy &AsyncInfoWrapper) override {
-    ODBG(OLDT_DataTransfer) << llvm::format("=== Phase 2: dataRetrieve(HstPtr=%p, TgtPtr=%p, Size=%ld) ===", HstPtr, TgtPtr, Size);
+    ODBG(OLDT_DataTransfer) << llvm::format("=== dataRetrieve(HstPtr=%p, TgtPtr=%p, Size=%ld) ===", HstPtr, TgtPtr, Size);
     
     // Validate inputs
     if (!ctx) {
@@ -711,7 +711,7 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     return Plugin::success();
   }
 
-  /// New offload-platform API context (Phase 5: old channels removed)
+  /// offload-platform API context of this device's mailbox
   tbird_context_t ctx = nullptr;
 
   /// Unified memory pool — all allocations (ELF + data) go through this.
@@ -819,7 +819,7 @@ private:
 
 /// Implementation of ThunderbirdKernelTy::initImpl (defined after ThunderbirdDeviceImageTy)
 Error ThunderbirdKernelTy::initImpl(GenericDeviceTy &Device, DeviceImageTy &Image) {
-  ODBG(OLDT_Init) << llvm::format("=== Phase 4: ThunderbirdKernelTy::initImpl START (kernel=%s) ===", getName());
+  ODBG(OLDT_Init) << llvm::format("=== ThunderbirdKernelTy::initImpl START (kernel=%s) ===", getName());
   fprintf(stderr, "[THUNDERBIRD RTL] Kernel initImpl called for: %s\n", getName());
   fflush(stderr);
   
@@ -861,7 +861,7 @@ Error ThunderbirdKernelTy::initImpl(GenericDeviceTy &Device, DeviceImageTy &Imag
   KernelEnvironment.Configuration.MayUseNestedParallelism = 2; // Unknown
   KernelEnvironment.Configuration.UseGenericStateMachine = 2;  // Unknown
 
-  ODBG(OLDT_Init) << "=== Phase 4: ThunderbirdKernelTy::initImpl COMPLETE ===";
+  ODBG(OLDT_Init) << "=== ThunderbirdKernelTy::initImpl COMPLETE ===";
   fprintf(stderr, "[THUNDERBIRD RTL] Kernel initImpl COMPLETE for: %s\n", getName());
   fflush(stderr);
   return Plugin::success();
