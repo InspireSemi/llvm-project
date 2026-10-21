@@ -16,7 +16,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <glob.h>
-#include <mutex>
 #include <string>
 #include <variant>
 #include <unordered_map>
@@ -39,13 +38,11 @@
 #include "llvm/BinaryFormat/ELF.h"
 
 // Thunderbird plugin modules
-#include "MemoryPool.h"
 #include "LaunchSlots.h"
 #include "DeviceGlobals.h"
 
-// New offload-platform API
+// offload-platform's host library
 #include "tbird_offload_api.h"
-#include "internal/tbird_types_internal.h"
 
 #if !defined(__BYTE_ORDER__) || !defined(__ORDER_LITTLE_ENDIAN__) ||           \
     !defined(__ORDER_BIG_ENDIAN__)
@@ -58,13 +55,11 @@
 #define BIGENDIAN_CPU
 #endif
 
-// Device memory is MemoryPool (MemoryPool.h); what a launch sends is LaunchSlots.h.
+// Device memory is the library's (tbird_alloc), named by device address; what a
+// launch sends is LaunchSlots.h.
 
-// The number of OpenMP devices the plugin exposes is discovered at init
-// time by enumerating /dev/tbird*-K char devices the host driver creates,
-// one per application mailbox. See discoverThunderbirdDevicePaths() below.
-// THUNDERBIRD_DEVICE_PATH=<path> forces a single-device legacy mode using
-// the supplied path.
+// The OpenMP devices the plugin exposes are named at init time; see
+// getThunderbirdDevicePaths() below.
 
 // The maximum number of physical cores in this plugin.
 #define THUNDERBIRD_MAX_THREADS 6144
@@ -81,18 +76,34 @@ struct ThunderbirdKernelTy;
 struct ThunderbirdDeviceTy;
 struct ThunderbirdPluginTy;
 
-/// Application-mailbox device path discovery.
+/// The names of the devices, in OpenMP device order; each is passed to
+/// tbird_open. The first of these that applies:
 ///
-/// The host driver (tbird_offload.ko) exposes one /dev/tbird<PCI>-<K> char
-/// device per application mailbox. Each maps 1:1 onto an OpenMP device at
-/// the libomptarget layer. Discovery is cached in a function-static so
-/// initImpl() in plugin and device share a consistent view across calls.
+///   - THUNDERBIRD_DEVICES=<name>,<name>,...: these devices, in this order.
+///     Empty names (",,", a trailing ",") are skipped.
+///   - THUNDERBIRD_DEVICE_PATH=<path>: that one device.
+///   - Otherwise every application mailbox of the host driver
+///     (tbird_offload.ko), which exposes one /dev/tbird<PCI>-<K> char device
+///     per mailbox.
 ///
-/// Override path: setting THUNDERBIRD_DEVICE_PATH=<path> forces a single
-/// device using the explicit path (legacy single-device mode).
+/// Cached in a function-static so initImpl() in plugin and device share a
+/// consistent view across calls.
 static const std::vector<std::string> &getThunderbirdDevicePaths() {
   static std::vector<std::string> paths = []() {
     std::vector<std::string> p;
+    if (const char *list = getenv("THUNDERBIRD_DEVICES")) {
+      std::string names(list);
+      size_t start = 0;
+      while (start <= names.size()) {
+        size_t end = names.find(',', start);
+        if (end == std::string::npos)
+          end = names.size();
+        if (end > start)
+          p.emplace_back(names.substr(start, end - start));
+        start = end + 1;
+      }
+      return p;
+    }
     if (const char *override_path = getenv("THUNDERBIRD_DEVICE_PATH")) {
       p.emplace_back(override_path);
       return p;
@@ -139,32 +150,24 @@ private:
   /// The kernel function to execute.
   void (*Func)(void);
 
-  /// Image buffer handle containing this kernel's ELF image
-  tbird_buffer_t image_buffer = nullptr;
-  /// Offset of ELF image within pool slab
-  size_t kernel_elf_offset = 0;
-  /// Size of the ELF image: with the buffer and offset, it names the image's
-  /// loaded copy on the device.
-  size_t kernel_image_size = 0;
+  /// The loaded image this kernel is in.
+  tbird_image_t LoadedImage = nullptr;
 };
 
 /// Class implementing the Thunderbird device images properties.
 ///
-/// The image's bytes sit in pool memory, and the device loads them once
-/// (tbird_load_image); every kernel of the image runs in that loaded copy,
-/// which the device names by (image_buffer, elf_offset, image_size).
+/// The image's bytes are written to device memory, and the device loads them
+/// once (tbird_load_image); every kernel of the image runs in that loaded copy.
 struct ThunderbirdDeviceImageTy : public DeviceImageTy {
   /// Create the Thunderbird image with the id and the image contents.
   ThunderbirdDeviceImageTy(int32_t ImageId, GenericDeviceTy &Device,
                            std::unique_ptr<MemoryBuffer> &&Image)
       : DeviceImageTy(ImageId, Device, std::move(Image)) {}
 
-  /// Buffer handle for the loaded image
-  tbird_buffer_t image_buffer = nullptr;
-  /// Offset of ELF image within the pool slab (for elf_offset in kernel launch)
-  size_t elf_offset = 0;
-  /// Size of the ELF image in bytes.
-  size_t image_size = 0;
+  /// The library's handle of the loaded image; null until loaded.
+  tbird_image_t Handle = nullptr;
+  /// Device address of the image's bytes.
+  uint64_t Addr = 0;
   /// Where the device loaded the image: its symbol S is at LoadBase + S's
   /// st_value. 0 until the device has loaded it.
   uint64_t LoadBase = 0;
@@ -204,21 +207,15 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     fflush(stderr);
     ODBG(OLDT_Init) << llvm::format("DeviceId=%d -> device_path=%s", DeviceId, device_path.c_str());
 
-    // Each plugin-level OpenMP device opens a single application mailbox
-    // (1:1 mapping). num_mailboxes=1 is intentional: this is the count of
-    // mailboxes per tbird_init() call, not the system-wide total.
-    ctx = tbird_init(device_path.c_str(), 1);
+    ctx = tbird_open(device_path.c_str());
     if (!ctx) {
-      ODBG(OLDT_Init) << "ERROR: tbird_init returned NULL";
+      ODBG(OLDT_Init) << llvm::format("ERROR: tbird_open failed: %s", tbird_last_error());
       return Plugin::error(ErrorCode::UNKNOWN,
-                          "Failed to initialize Thunderbird context: device=%s",
-                          device_path.c_str());
+                          "Failed to initialize Thunderbird context: device=%s: %s",
+                          device_path.c_str(), tbird_last_error());
     }
-    
-    ODBG(OLDT_Init) << llvm::format("SUCCESS: Thunderbird context initialized: ctx=%p", (void*)ctx);
 
-    pool.init(ctx);
-    ODBG(OLDT_Init) << "Memory pool initialized";
+    ODBG(OLDT_Init) << llvm::format("SUCCESS: Thunderbird context initialized: ctx=%p", (void*)ctx);
 
     ODBG(OLDT_Init) << "=== initImpl COMPLETE ===";
     fprintf(stderr, "[THUNDERBIRD RTL] Device initImpl COMPLETE\n");
@@ -239,16 +236,9 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
       return Plugin::success();
     }
     
-    ODBG(OLDT_Module) << llvm::format("Unloading image: Image=%p, image_buffer=%p", (void*)TBirdImage, (void*)TBirdImage->image_buffer);
-
-    // Pool manages image buffer lifetime — no per-image free.
-    // The slab is released in pool.destroy() at device shutdown.
-    if (TBirdImage->image_buffer) {
-      ODBG(OLDT_Module) << llvm::format("Image buffer %p managed by pool (offset %zu) — no free", (void*)TBirdImage->image_buffer, TBirdImage->elf_offset);
-      TBirdImage->image_buffer = nullptr;
-    } else {
-      ODBG(OLDT_Module) << "No image buffer to free";
-    }
+    // The image's device memory is not freed: the device keeps a loaded
+    // image until the context closes, so the library refuses to free it.
+    ODBG(OLDT_Module) << llvm::format("Unloading image: Image=%p, device memory 0x%lx stays until the device closes", (void*)TBirdImage, (unsigned long)TBirdImage->Addr);
 
     ODBG(OLDT_Module) << "Freeing Image object";
     TBirdImage->~ThunderbirdDeviceImageTy();
@@ -259,16 +249,11 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     return Plugin::success();
   }
 
-  /// Deinitialize the device: release the pool's slabs and close the context.
-  /// The generic layer has unloaded the images and freed the remaining
-  /// allocations by now, and makes no further calls on this device.
+  /// Deinitialize the device: close the context, which releases its memory
+  /// and images. The generic layer has unloaded the images and freed the
+  /// remaining allocations by now, and makes no further calls on this device.
   Error deinitImpl() override {
-    std::lock_guard<std::mutex> Lock(MailboxMutex);
-    pool.destroy();
-    StagingPtr = nullptr;
-    StagingBuf = nullptr;
-    StagingOff = 0;
-    tbird_cleanup(ctx);
+    tbird_close(ctx);
     ctx = nullptr;
     return Plugin::success();
   }
@@ -356,68 +341,55 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
                                    "(e_type %u)",
                                    (unsigned)ElfOrErr->getHeader().e_type));
 
-    // Allocating may add a slab, which waits for the device's acknowledgement,
-    // and the load is a device request: both use the mailbox.
-    std::lock_guard<std::mutex> Lock(MailboxMutex);
-
-    ODBG(OLDT_Module) << llvm::format("POOL: allocating image buffer: %zu bytes", ImageSize);
-    std::string Why;
-    void *img_ptr = pool.allocate(ImageSize, &Why);
-    if (!img_ptr)
+    uint64_t ImageAddr = 0;
+    if (tbird_alloc(ctx, ImageSize, &ImageAddr) != TBIRD_SUCCESS)
       return Discard(Plugin::error(ErrorCode::OUT_OF_RESOURCES,
                                    "no device memory for the image (%zu bytes): %s",
-                                   ImageSize, Why.c_str()));
+                                   ImageSize, tbird_last_error()));
+    ODBG(OLDT_Module) << llvm::format("Image memory: %zu bytes at device address 0x%lx", ImageSize, (unsigned long)ImageAddr);
 
-    // Resolve slab buffer and offset for this sub-allocation
-    auto [image_buf, elf_off] = pool.lookup(img_ptr);
-    ODBG(OLDT_Module) << llvm::format("POOL: image at slab buffer=%p, elf_offset=%zu", (void*)image_buf, elf_off);
-
-    // Upload image to shared buffer at the pool-assigned offset
-    tbird_status_t status = tbird_buffer_write(ctx, image_buf, elf_off,
-                                               ImageStart, ImageSize);
-    if (status != TBIRD_SUCCESS) {
-      ODBG(OLDT_Module) << llvm::format("ERROR: tbird_buffer_write failed for image: %s", tbird_last_error(ctx));
+    if (tbird_write(ctx, ImageAddr, ImageStart, ImageSize) != TBIRD_SUCCESS) {
+      ODBG(OLDT_Module) << llvm::format("ERROR: tbird_write failed for image: %s", tbird_last_error());
       Error Err = Plugin::error(ErrorCode::UNKNOWN,
-                                "tbird_buffer_write failed for image: %s",
-                                tbird_last_error(ctx));
-      pool.deallocate(img_ptr);
+                                "tbird_write failed for image: %s",
+                                tbird_last_error());
+      tbird_free(ctx, ImageAddr);
       return Discard(std::move(Err));
     }
 
     uint64_t LoadBase = 0;
-    status = tbird_load_image(ctx, image_buf, elf_off, ImageSize, &LoadBase);
-    if (status != TBIRD_SUCCESS) {
-      ODBG(OLDT_Module) << llvm::format("ERROR: tbird_load_image failed: %s", tbird_last_error(ctx));
+    if (tbird_load_image(ctx, ImageAddr, ImageSize, &Image->Handle, &LoadBase) !=
+        TBIRD_SUCCESS) {
+      ODBG(OLDT_Module) << llvm::format("ERROR: tbird_load_image failed: %s", tbird_last_error());
       Error Err = Plugin::error(ErrorCode::INVALID_BINARY,
                                 "loading the image on the device failed: %s",
-                                tbird_last_error(ctx));
-      pool.deallocate(img_ptr);
+                                tbird_last_error());
+      tbird_free(ctx, ImageAddr);
       return Discard(std::move(Err));
     }
 
-    Image->image_buffer = image_buf;
-    Image->elf_offset = elf_off;
-    Image->image_size = ImageSize;
+    Image->Addr = ImageAddr;
     Image->LoadBase = LoadBase;
-    ODBG(OLDT_Module) << llvm::format("SUCCESS: image of %zu bytes at buffer=%p, elf_offset=%zu, loaded on the device at base 0x%lx", ImageSize, (void*)image_buf, elf_off, (unsigned long)LoadBase);
+    ODBG(OLDT_Module) << llvm::format("SUCCESS: image of %zu bytes at 0x%lx, loaded on the device at base 0x%lx", ImageSize, (unsigned long)ImageAddr, (unsigned long)LoadBase);
     ODBG(OLDT_Module) << "=== loadBinaryImpl COMPLETE ===";
     
     return Image;
   }
 
-  /// Allocate memory: device, default and shared allocations come from the
-  /// pool (device addresses); host allocations from std::malloc.
+  /// Allocate memory: device, default and shared allocations are device
+  /// memory (tbird_alloc, device addresses); host allocations std::malloc.
   Expected<void *> allocate(size_t Size, void *, TargetAllocTy Kind,
                             size_t Alignment) override {
     ODBG(OLDT_Alloc) << llvm::format("=== allocate(Size=%zu, Kind=%d, Alignment=%zu) ===", Size, (int)Kind, Alignment);
 
-    // Both the pool and std::malloc return MemoryPool::ALIGNMENT-aligned memory
-    // and nothing stronger; a larger alignment is refused rather than ignored.
-    if (Alignment > MemoryPool::ALIGNMENT)
+    // Both tbird_alloc and std::malloc return TBIRD_ALLOC_ALIGNMENT-aligned
+    // memory and nothing stronger; a larger alignment is refused rather than
+    // ignored.
+    if (Alignment > TBIRD_ALLOC_ALIGNMENT)
       return Plugin::error(ErrorCode::UNSUPPORTED,
                            "allocation alignment %zu exceeds the %zu bytes "
                            "Thunderbird allocations are aligned to",
-                           Alignment, (size_t)MemoryPool::ALIGNMENT);
+                           Alignment, (size_t)TBIRD_ALLOC_ALIGNMENT);
 
     if (Size == 0) {
       ODBG(OLDT_Alloc) << "WARNING: Requested allocation of size 0";
@@ -435,16 +407,14 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
           return nullptr;
         }
 
-        std::lock_guard<std::mutex> Lock(MailboxMutex);
-        std::string Why;
-        void *ptr = pool.allocate(Size, &Why);
-        if (!ptr) {
-          ODBG(OLDT_Alloc) << llvm::format("ERROR: pool.allocate(%zu) failed: %s", Size, Why.c_str());
+        uint64_t Addr = 0;
+        if (tbird_alloc(ctx, Size, &Addr) != TBIRD_SUCCESS) {
+          ODBG(OLDT_Alloc) << llvm::format("ERROR: tbird_alloc(%zu) failed: %s", Size, tbird_last_error());
           return nullptr;
         }
 
-        ODBG(OLDT_Alloc) << llvm::format("SUCCESS: pool.allocate(%zu) → %p (now %zu tracked)", Size, ptr, pool.liveAllocations());
-        return ptr;
+        ODBG(OLDT_Alloc) << llvm::format("SUCCESS: tbird_alloc(%zu) → 0x%lx", Size, (unsigned long)Addr);
+        return reinterpret_cast<void *>(Addr);
       }
     case TARGET_ALLOC_HOST:
       ODBG(OLDT_Alloc) << "HOST allocation (using malloc)";
@@ -454,7 +424,7 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     return MemAlloc;
   }
 
-  /// Free device memory — removes from pool tracking (grow-only, no DMA release).
+  /// Free memory allocate() returned.
   Error free(void *TgtPtr, TargetAllocTy Kind) override {
     ODBG(OLDT_Alloc) << llvm::format("=== free(TgtPtr=%p, Kind=%d) ===", TgtPtr, (int)Kind);
 
@@ -462,8 +432,10 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     case TARGET_ALLOC_DEFAULT:
     case TARGET_ALLOC_DEVICE:
     case TARGET_ALLOC_SHARED:
-      pool.deallocate(TgtPtr);
-      ODBG(OLDT_Alloc) << llvm::format("SUCCESS: pool.deallocate(%p) (now %zu tracked)", TgtPtr, pool.liveAllocations());
+      if (tbird_free(ctx, reinterpret_cast<uint64_t>(TgtPtr)) != TBIRD_SUCCESS)
+        return Plugin::error(ErrorCode::INVALID_ARGUMENT,
+                             "freeing device memory %p failed: %s", TgtPtr,
+                             tbird_last_error());
       return Plugin::success();
     case TARGET_ALLOC_HOST:
       std::free(TgtPtr);
@@ -504,32 +476,19 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     return Plugin::error(ErrorCode::UNKNOWN, "HstPtr is NULL");
   }
   
-  if (Size <= 0) {
-    ODBG(OLDT_DataTransfer) << llvm::format("WARNING: Size=%ld is non-positive", Size);
-  }
-  
-  // Look up buffer handle (supports interior pointers)
-  ODBG(OLDT_DataTransfer) << llvm::format("Looking up TgtPtr in pool (%zu tracked)", pool.liveAllocations());
-  auto [buffer, offset] = findContainingBuffer(TgtPtr);
-  if (!buffer)
-    return copyImageMemory(/*ToDevice=*/true, TgtPtr, const_cast<void *>(HstPtr),
-                           Size, "dataSubmit");
-  std::lock_guard<std::mutex> Lock(MailboxMutex);
+  if (Size < 0)
+    return Plugin::error(ErrorCode::INVALID_ARGUMENT,
+                         "dataSubmit: negative size %ld", (long)Size);
 
-  ODBG(OLDT_DataTransfer) << llvm::format("Found buffer=%p for TgtPtr=%p (offset=%zu)", (void*)buffer, TgtPtr, offset);
-
-  // Transfer via driver ioctl
-  ODBG(OLDT_DataTransfer) << llvm::format("Calling tbird_buffer_write(ctx=%p, buffer=%p, offset=%zu, src=%p, size=%ld)", (void*)ctx, (void*)buffer, offset, HstPtr, Size);
-
-  tbird_status_t status = tbird_buffer_write(ctx, buffer, offset, HstPtr, Size);
-  if (status != TBIRD_SUCCESS) {
-    ODBG(OLDT_DataTransfer) << llvm::format("ERROR: tbird_buffer_write failed: %s", tbird_last_error(ctx));
+  if (tbird_write(ctx, reinterpret_cast<uint64_t>(TgtPtr), HstPtr, Size) !=
+      TBIRD_SUCCESS) {
+    ODBG(OLDT_DataTransfer) << llvm::format("ERROR: tbird_write failed: %s", tbird_last_error());
     return Plugin::error(ErrorCode::UNKNOWN,
-                        "tbird_buffer_write failed: %s", tbird_last_error(ctx));
+                        "tbird_write failed: %s", tbird_last_error());
   }
-  
-  ODBG(OLDT_DataTransfer) << llvm::format("SUCCESS: dataSubmit: %ld bytes to buffer %p", Size, (void*)buffer);
-  
+
+  ODBG(OLDT_DataTransfer) << llvm::format("SUCCESS: dataSubmit: %ld bytes to %p", Size, TgtPtr);
+
   return Plugin::success();
 }
 
@@ -549,44 +508,31 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
       return Plugin::error(ErrorCode::UNKNOWN, "HstPtr is NULL");
     }
     
-    if (Size <= 0) {
-      ODBG(OLDT_DataTransfer) << llvm::format("WARNING: Size=%ld is non-positive", Size);
-    }
-    
-    // Look up buffer handle (supports interior pointers)
-    ODBG(OLDT_DataTransfer) << llvm::format("Looking up TgtPtr in pool (%zu tracked)", pool.liveAllocations());
-    auto [buffer, offset] = findContainingBuffer(const_cast<void*>(TgtPtr));
-    if (!buffer)
-      return copyImageMemory(/*ToDevice=*/false, TgtPtr, HstPtr, Size,
-                             "dataRetrieve");
-    std::lock_guard<std::mutex> Lock(MailboxMutex);
+    if (Size < 0)
+      return Plugin::error(ErrorCode::INVALID_ARGUMENT,
+                           "dataRetrieve: negative size %ld", (long)Size);
 
-    ODBG(OLDT_DataTransfer) << llvm::format("Found buffer=%p for TgtPtr=%p (offset=%zu)", (void*)buffer, TgtPtr, offset);
-
-    // Transfer via driver ioctl
-    ODBG(OLDT_DataTransfer) << llvm::format("Calling tbird_buffer_read(ctx=%p, buffer=%p, offset=%zu, dst=%p, size=%ld)", (void*)ctx, (void*)buffer, offset, HstPtr, Size);
-
-    tbird_status_t status = tbird_buffer_read(ctx, buffer, offset, HstPtr, Size);
-    if (status != TBIRD_SUCCESS) {
-      ODBG(OLDT_DataTransfer) << llvm::format("ERROR: tbird_buffer_read failed: %s", tbird_last_error(ctx));
+    if (tbird_read(ctx, reinterpret_cast<uint64_t>(TgtPtr), HstPtr, Size) !=
+        TBIRD_SUCCESS) {
+      ODBG(OLDT_DataTransfer) << llvm::format("ERROR: tbird_read failed: %s", tbird_last_error());
       return Plugin::error(ErrorCode::UNKNOWN,
-                          "tbird_buffer_read failed: %s", tbird_last_error(ctx));
+                          "tbird_read failed: %s", tbird_last_error());
     }
-    
-    ODBG(OLDT_DataTransfer) << llvm::format("SUCCESS: dataRetrieve: %ld bytes from buffer %p", Size, (void*)buffer);
-    
+
+    ODBG(OLDT_DataTransfer) << llvm::format("SUCCESS: dataRetrieve: %ld bytes from %p", Size, TgtPtr);
+
     return Plugin::success();
   }
 
-  /// Every data operation is a synchronous ioctl, so nothing can be reordered.
+  /// Every data operation is a synchronous library call, so nothing can be
+  /// reordered.
   Error dataFence(__tgt_async_info *AsyncInfo) override {
     return Plugin::success();
   }
 
-  /// Fill device memory with a repeated pattern. The pattern is built on the
-  /// host and written through the buffer it belongs to, or through the device
-  /// for memory of a loaded image: a device pointer is the device's address,
-  /// which the host cannot write through.
+  /// Fill device memory with a repeated pattern, built on the host and
+  /// written to the device: a device pointer is the device's address, which
+  /// the host cannot write through.
   Error dataFillImpl(void *TgtPtr, const void *PatternPtr, int64_t PatternSize,
                      int64_t Size,
                      AsyncInfoWrapperTy &AsyncInfoWrapper) override {
@@ -596,19 +542,14 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
       return Plugin::error(ErrorCode::INVALID_ARGUMENT,
                            "dataFill: invalid pattern (size %ld)",
                            (long)PatternSize);
-    auto [buffer, offset] = findContainingBuffer(TgtPtr);
     std::vector<char> Fill(Size);
     for (int64_t I = 0; I < Size; I += PatternSize)
       std::memcpy(Fill.data() + I, PatternPtr,
                   std::min<int64_t>(PatternSize, Size - I));
-    if (!buffer)
-      return copyImageMemory(/*ToDevice=*/true, TgtPtr, Fill.data(), Size,
-                             "dataFill");
-    std::lock_guard<std::mutex> Lock(MailboxMutex);
-    if (tbird_buffer_write(ctx, buffer, offset, Fill.data(), Size) !=
-        TBIRD_SUCCESS)
-      return Plugin::error(ErrorCode::UNKNOWN, "tbird_buffer_write failed: %s",
-                           tbird_last_error(ctx));
+    if (tbird_write(ctx, reinterpret_cast<uint64_t>(TgtPtr), Fill.data(),
+                    Size) != TBIRD_SUCCESS)
+      return Plugin::error(ErrorCode::UNKNOWN, "tbird_write failed: %s",
+                           tbird_last_error());
     return Plugin::success();
   }
 
@@ -711,79 +652,11 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     return Plugin::success();
   }
 
-  /// offload-platform API context of this device's mailbox
+  /// The library's context of this device. The library runs the calls on it
+  /// one at a time, so the plugin holds no lock of its own.
   tbird_context_t ctx = nullptr;
 
-  /// Unified memory pool — all allocations (ELF + data) go through this.
-  MemoryPool pool;
-
-  /// Find the buffer containing ptr (supports interior pointers).
-  /// Delegates to the memory pool for all allocations.
-  std::pair<tbird_buffer_t, size_t> findContainingBuffer(void *ptr) {
-    return pool.lookup(ptr);
-  }
-
-  /// Serialises the device requests that share the one mailbox page: a slab
-  /// allocation (which waits for the device's acknowledgement), an image load,
-  /// a device copy and a kernel launch. A request and its reply occupy the
-  /// same page, so two in flight would overwrite each other. A launch holds it
-  /// for the kernel's duration, as the device serves one request at a time.
-  /// It also guards the device's context: the library keeps the context's
-  /// error text and buffer table without a lock, so every call on ctx after
-  /// initImpl -- buffer reads and writes included -- is made holding it.
-  std::mutex MailboxMutex;
-
-  /// Copy Size bytes between host memory and device memory outside the pool,
-  /// which is a loaded image's memory -- its global variables. The device
-  /// copies through a staging range of pool memory, one request per chunk,
-  /// and refuses an address that is not inside a loaded image.
-  Error copyImageMemory(bool ToDevice, const void *TgtPtr, void *HstPtr,
-                        int64_t Size, const char *Op) {
-    if (Size <= 0)
-      return Plugin::success();
-    std::lock_guard<std::mutex> Lock(MailboxMutex);
-    if (!StagingPtr) {
-      std::string Why;
-      StagingPtr = pool.allocate(STAGING_SIZE, &Why);
-      if (!StagingPtr)
-        return Plugin::error(ErrorCode::OUT_OF_RESOURCES,
-                             "%s: no staging memory for a device copy: %s", Op,
-                             Why.c_str());
-      std::tie(StagingBuf, StagingOff) = pool.lookup(StagingPtr);
-    }
-    char *Host = static_cast<char *>(HstPtr);
-    std::string Why = ::thunderbird::copyInChunks(
-        reinterpret_cast<uint64_t>(TgtPtr), static_cast<size_t>(Size),
-        STAGING_SIZE, [&](uint64_t Addr, size_t Off, size_t Len) -> std::string {
-          if (ToDevice && tbird_buffer_write(ctx, StagingBuf, StagingOff,
-                                             Host + Off, Len) != TBIRD_SUCCESS)
-            return tbird_last_error(ctx);
-          if (tbird_device_copy(ctx,
-                                ToDevice ? TBIRD_COPY_TO_DEVICE
-                                         : TBIRD_COPY_FROM_DEVICE,
-                                Addr, StagingBuf, StagingOff,
-                                Len) != TBIRD_SUCCESS)
-            return tbird_last_error(ctx);
-          if (!ToDevice && tbird_buffer_read(ctx, StagingBuf, StagingOff,
-                                             Host + Off, Len) != TBIRD_SUCCESS)
-            return tbird_last_error(ctx);
-          return "";
-        });
-    if (!Why.empty())
-      return Plugin::error(ErrorCode::UNKNOWN,
-                           "%s: %p is not pool memory, and the device did not "
-                           "copy it as image memory: %s",
-                           Op, TgtPtr, Why.c_str());
-    return Plugin::success();
-  }
-
 private:
-  /// The staging range device copies go through, allocated at the first one.
-  static constexpr size_t STAGING_SIZE = 64 * 1024;
-  void *StagingPtr = nullptr;
-  tbird_buffer_t StagingBuf = nullptr;
-  size_t StagingOff = 0;
-
   /// Grid values for Thunderbird plugins.
   ///
   /// NOT WIRED to launch behaviour, and not a statement about the hardware.
@@ -823,19 +696,15 @@ Error ThunderbirdKernelTy::initImpl(GenericDeviceTy &Device, DeviceImageTy &Imag
   fprintf(stderr, "[THUNDERBIRD RTL] Kernel initImpl called for: %s\n", getName());
   fflush(stderr);
   
-  // Get image buffer from DeviceImageTy
+  // The loaded image the kernel runs in
   auto &TBirdImage = static_cast<ThunderbirdDeviceImageTy &>(Image);
-  image_buffer = TBirdImage.image_buffer;
-  kernel_elf_offset = TBirdImage.elf_offset;
-  kernel_image_size = TBirdImage.image_size;
+  LoadedImage = TBirdImage.Handle;
 
-  if (!image_buffer) {
-    ODBG(OLDT_Init) << llvm::format("ERROR: Image buffer is NULL for kernel %s", getName());
+  if (!LoadedImage) {
+    ODBG(OLDT_Init) << llvm::format("ERROR: Image not loaded for kernel %s", getName());
     return Plugin::error(ErrorCode::INVALID_BINARY,
-                        "Image buffer not loaded for kernel %s", getName());
+                        "Image not loaded for kernel %s", getName());
   }
-
-  ODBG(OLDT_Init) << llvm::format("Stored image_buffer=%p, elf_offset=%zu for kernel %s", (void*)image_buffer, kernel_elf_offset, getName());
 
   // Functions have zero size.
   GlobalTy Global(getName(), 0);
@@ -898,7 +767,7 @@ Error ThunderbirdKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
   // generic model by construction.
   ODBG(OLDT_Kernel) << llvm::format("Execution mode: GENERIC (host-runtime threads=%u, blocks=%u)", NumThreads[0] * NumThreads[1] * NumThreads[2], NumBlocks[0] * NumBlocks[1] * NumBlocks[2]);
 
-  // Every argument is one pointer-sized value, sent unchanged: pool memory is
+  // Every argument is one pointer-sized value, sent unchanged: device memory is
   // device addresses, so a pointer argument is already one the kernel can use,
   // and so is a pointer stored in memory it reaches. dyn_ptr is the last slot.
   uint64_t Slots[TBIRD_MAX_ARGS];
@@ -909,10 +778,6 @@ Error ThunderbirdKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
                          BadArgs.c_str());
   for (uint32_t I = 0; I < LaunchParams.NumArgs; ++I)
     ODBG(OLDT_Kernel) << llvm::format("  slot[%u] = 0x%lx", I, (unsigned long)Slots[I]);
-
-  // The image's buffer, offset and size name its loaded copy on the device,
-  // the one tbird_load_image made at loadBinaryImpl.
-  size_t ImageSize = kernel_image_size;
 
   // thread-limit-var for this kernel, taken from the RAW clause value rather
   // than the clamped NumThreads[0] above. getEffectiveNumThreads() adds a warp
@@ -930,14 +795,11 @@ Error ThunderbirdKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
   // conforming in both cases. 0 means "leave the device runtime's default".
   uint32_t ThreadLimit = KernelArgs.UserThreadLimit[0];
 
-  ODBG(OLDT_Kernel) << llvm::format("tbird_launch_kernel_slots: elf_offset=%zu, image_size=%zu, slots=%u, thread_limit=%u", kernel_elf_offset, ImageSize, LaunchParams.NumArgs, ThreadLimit);
-  std::lock_guard<std::mutex> Lock(TBirdDevice->MailboxMutex);
-  tbird_status_t Status = tbird_launch_kernel_slots(
-      TBirdDevice->ctx, image_buffer, kernel_elf_offset, ImageSize, getName(),
-      Slots, LaunchParams.NumArgs, ThreadLimit);
-  if (Status != TBIRD_SUCCESS)
+  ODBG(OLDT_Kernel) << llvm::format("tbird_launch: slots=%u, thread_limit=%u", LaunchParams.NumArgs, ThreadLimit);
+  if (tbird_launch(TBirdDevice->ctx, LoadedImage, getName(), Slots,
+                   LaunchParams.NumArgs, ThreadLimit) != TBIRD_SUCCESS)
     return Plugin::error(ErrorCode::UNKNOWN, "kernel %s: %s", getName(),
-                         tbird_last_error(TBirdDevice->ctx));
+                         tbird_last_error());
 
   ODBG(OLDT_Kernel) << llvm::format("SUCCESS: Kernel %s completed", getName());
   return Plugin::success();

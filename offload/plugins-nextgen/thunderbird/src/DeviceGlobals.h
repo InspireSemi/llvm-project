@@ -6,16 +6,14 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// Where a kernel image's symbols are on the device, and how the host reaches
-// the memory they name.
+// Where a kernel image's symbols are on the device.
 //
 // A Thunderbird kernel image is an ELF shared object that the device loads
 // once (tbird_load_image), and every kernel of the image runs in that loaded
 // copy. Its global variables therefore live in the device's copy, at the load
 // base the device reports plus the symbol's st_value -- the dynamic loader's
-// own rule for a shared object. That memory is not in a pool slab, so the host
-// cannot write it directly; the device copies to and from it through a
-// staging range of shared memory, one request per chunk (tbird_device_copy).
+// own rule for a shared object. The host reaches them with tbird_write and
+// tbird_read at that address.
 //
 // Plain values in and out, so this is testable without the plugin.
 //
@@ -24,9 +22,7 @@
 #ifndef THUNDERBIRD_DEVICEGLOBALS_H
 #define THUNDERBIRD_DEVICEGLOBALS_H
 
-#include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <string>
 
 namespace thunderbird {
@@ -45,19 +41,6 @@ struct ImageSymbol {
 std::string deviceSymbolAddress(uint64_t LoadBase, const char *Name,
                                 const ImageSymbol &Sym, uint64_t ExpectedSize,
                                 uint64_t *Addr);
-
-/// One device request: copy Len bytes at device address DevAddr, which is
-/// Offset bytes into the whole copy. Returns "" or why not.
-using DeviceChunkCopy =
-    std::function<std::string(uint64_t DevAddr, size_t Offset, size_t Len)>;
-
-/// Copy Size bytes starting at device address DevAddr in chunks of at most
-/// ChunkSize, calling CopyChunk once per chunk in address order. Returns "" on
-/// success, or the first failing chunk's reason; later chunks are not tried.
-/// Size 0 copies nothing; ChunkSize 0, or a range that wraps the address
-/// space, is refused.
-std::string copyInChunks(uint64_t DevAddr, size_t Size, size_t ChunkSize,
-                         const DeviceChunkCopy &CopyChunk);
 
 } // namespace thunderbird
 

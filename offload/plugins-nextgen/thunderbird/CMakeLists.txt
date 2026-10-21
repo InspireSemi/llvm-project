@@ -3,7 +3,6 @@ add_target_library(omptarget.rtl.thunderbird THUNDERBIRD)
 
 target_sources(omptarget.rtl.thunderbird PRIVATE
   src/rtl.cpp
-  src/MemoryPool.cpp
   src/LaunchSlots.cpp
   src/DeviceGlobals.cpp
 )

@@ -25,19 +25,4 @@ std::string deviceSymbolAddress(uint64_t LoadBase, const char *Name,
   return "";
 }
 
-std::string copyInChunks(uint64_t DevAddr, size_t Size, size_t ChunkSize,
-                         const DeviceChunkCopy &CopyChunk) {
-  if (ChunkSize == 0)
-    return "device copy with a chunk size of 0";
-  if (Size != 0 && DevAddr + Size < DevAddr)
-    return "device copy range wraps the address space";
-  for (size_t Offset = 0; Offset < Size; Offset += ChunkSize) {
-    size_t Len = Size - Offset < ChunkSize ? Size - Offset : ChunkSize;
-    std::string Why = CopyChunk(DevAddr + Offset, Offset, Len);
-    if (!Why.empty())
-      return Why;
-  }
-  return "";
-}
-
 } // namespace thunderbird
