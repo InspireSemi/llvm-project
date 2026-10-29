@@ -342,28 +342,32 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
                                    (unsigned)ElfOrErr->getHeader().e_type));
 
     uint64_t ImageAddr = 0;
-    if (tbird_alloc(ctx, ImageSize, &ImageAddr) != TBIRD_SUCCESS)
-      return Discard(Plugin::error(ErrorCode::OUT_OF_RESOURCES,
-                                   "no device memory for the image (%zu bytes): %s",
-                                   ImageSize, tbird_last_error()));
+    if (auto Err = Plugin::check(tbird_alloc(ctx, ImageSize, &ImageAddr),
+                                 "allocating %zu bytes for the image failed: %s",
+                                 ImageSize))
+      return Discard(std::move(Err));
     ODBG(OLDT_Module) << llvm::format("Image memory: %zu bytes at device address 0x%lx", ImageSize, (unsigned long)ImageAddr);
 
-    if (tbird_write(ctx, ImageAddr, ImageStart, ImageSize) != TBIRD_SUCCESS) {
+    if (auto Err = Plugin::check(tbird_write(ctx, ImageAddr, ImageStart, ImageSize),
+                                 "tbird_write failed for image: %s")) {
       ODBG(OLDT_Module) << llvm::format("ERROR: tbird_write failed for image: %s", tbird_last_error());
-      Error Err = Plugin::error(ErrorCode::UNKNOWN,
-                                "tbird_write failed for image: %s",
-                                tbird_last_error());
       tbird_free(ctx, ImageAddr);
       return Discard(std::move(Err));
     }
 
     uint64_t LoadBase = 0;
-    if (tbird_load_image(ctx, ImageAddr, ImageSize, &Image->Handle, &LoadBase) !=
-        TBIRD_SUCCESS) {
+    tbird_status_t Status =
+        tbird_load_image(ctx, ImageAddr, ImageSize, &Image->Handle, &LoadBase);
+    if (Status != TBIRD_SUCCESS) {
       ODBG(OLDT_Module) << llvm::format("ERROR: tbird_load_image failed: %s", tbird_last_error());
-      Error Err = Plugin::error(ErrorCode::INVALID_BINARY,
-                                "loading the image on the device failed: %s",
-                                tbird_last_error());
+      // A device that cannot load the image says TBIRD_ERROR_DEVICE: what it
+      // refused is the image.
+      Error Err = Status == TBIRD_ERROR_DEVICE
+                      ? Plugin::error(ErrorCode::INVALID_BINARY,
+                                      "loading the image on the device failed: %s",
+                                      tbird_last_error())
+                      : Plugin::check(Status,
+                                      "loading the image on the device failed: %s");
       tbird_free(ctx, ImageAddr);
       return Discard(std::move(Err));
     }
@@ -408,10 +412,15 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
         }
 
         uint64_t Addr = 0;
-        if (tbird_alloc(ctx, Size, &Addr) != TBIRD_SUCCESS) {
+        tbird_status_t Status = tbird_alloc(ctx, Size, &Addr);
+        if (Status == TBIRD_ERROR_NO_DEVICE_MEMORY) {
+          // nullptr rather than an error: the memory manager then frees the
+          // blocks it keeps and tries again.
           ODBG(OLDT_Alloc) << llvm::format("ERROR: tbird_alloc(%zu) failed: %s", Size, tbird_last_error());
           return nullptr;
         }
+        if (auto Err = Plugin::check(Status, "tbird_alloc(%zu) failed: %s", Size))
+          return std::move(Err);
 
         ODBG(OLDT_Alloc) << llvm::format("SUCCESS: tbird_alloc(%zu) → 0x%lx", Size, (unsigned long)Addr);
         return reinterpret_cast<void *>(Addr);
@@ -432,11 +441,8 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     case TARGET_ALLOC_DEFAULT:
     case TARGET_ALLOC_DEVICE:
     case TARGET_ALLOC_SHARED:
-      if (tbird_free(ctx, reinterpret_cast<uint64_t>(TgtPtr)) != TBIRD_SUCCESS)
-        return Plugin::error(ErrorCode::INVALID_ARGUMENT,
-                             "freeing device memory %p failed: %s", TgtPtr,
-                             tbird_last_error());
-      return Plugin::success();
+      return Plugin::check(tbird_free(ctx, reinterpret_cast<uint64_t>(TgtPtr)),
+                           "freeing device memory %p failed: %s", TgtPtr);
     case TARGET_ALLOC_HOST:
       std::free(TgtPtr);
       return Plugin::success();
@@ -480,11 +486,11 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     return Plugin::error(ErrorCode::INVALID_ARGUMENT,
                          "dataSubmit: negative size %ld", (long)Size);
 
-  if (tbird_write(ctx, reinterpret_cast<uint64_t>(TgtPtr), HstPtr, Size) !=
-      TBIRD_SUCCESS) {
+  if (auto Err = Plugin::check(
+          tbird_write(ctx, reinterpret_cast<uint64_t>(TgtPtr), HstPtr, Size),
+          "tbird_write failed: %s")) {
     ODBG(OLDT_DataTransfer) << llvm::format("ERROR: tbird_write failed: %s", tbird_last_error());
-    return Plugin::error(ErrorCode::UNKNOWN,
-                        "tbird_write failed: %s", tbird_last_error());
+    return Err;
   }
 
   ODBG(OLDT_DataTransfer) << llvm::format("SUCCESS: dataSubmit: %ld bytes to %p", Size, TgtPtr);
@@ -512,11 +518,11 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
       return Plugin::error(ErrorCode::INVALID_ARGUMENT,
                            "dataRetrieve: negative size %ld", (long)Size);
 
-    if (tbird_read(ctx, reinterpret_cast<uint64_t>(TgtPtr), HstPtr, Size) !=
-        TBIRD_SUCCESS) {
+    if (auto Err = Plugin::check(
+            tbird_read(ctx, reinterpret_cast<uint64_t>(TgtPtr), HstPtr, Size),
+            "tbird_read failed: %s")) {
       ODBG(OLDT_DataTransfer) << llvm::format("ERROR: tbird_read failed: %s", tbird_last_error());
-      return Plugin::error(ErrorCode::UNKNOWN,
-                          "tbird_read failed: %s", tbird_last_error());
+      return Err;
     }
 
     ODBG(OLDT_DataTransfer) << llvm::format("SUCCESS: dataRetrieve: %ld bytes from %p", Size, TgtPtr);
@@ -546,11 +552,9 @@ struct ThunderbirdDeviceTy : public GenericDeviceTy {
     for (int64_t I = 0; I < Size; I += PatternSize)
       std::memcpy(Fill.data() + I, PatternPtr,
                   std::min<int64_t>(PatternSize, Size - I));
-    if (tbird_write(ctx, reinterpret_cast<uint64_t>(TgtPtr), Fill.data(),
-                    Size) != TBIRD_SUCCESS)
-      return Plugin::error(ErrorCode::UNKNOWN, "tbird_write failed: %s",
-                           tbird_last_error());
-    return Plugin::success();
+    return Plugin::check(tbird_write(ctx, reinterpret_cast<uint64_t>(TgtPtr),
+                                     Fill.data(), Size),
+                         "tbird_write failed: %s");
   }
 
   /// Device-to-device data exchange. Currently always UNSUPPORTED —
@@ -796,10 +800,11 @@ Error ThunderbirdKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
   uint32_t ThreadLimit = KernelArgs.UserThreadLimit[0];
 
   ODBG(OLDT_Kernel) << llvm::format("tbird_launch: slots=%u, thread_limit=%u", LaunchParams.NumArgs, ThreadLimit);
-  if (tbird_launch(TBirdDevice->ctx, LoadedImage, getName(), Slots,
-                   LaunchParams.NumArgs, ThreadLimit) != TBIRD_SUCCESS)
-    return Plugin::error(ErrorCode::UNKNOWN, "kernel %s: %s", getName(),
-                         tbird_last_error());
+  if (auto Err = Plugin::check(tbird_launch(TBirdDevice->ctx, LoadedImage,
+                                            getName(), Slots,
+                                            LaunchParams.NumArgs, ThreadLimit),
+                               "kernel %s: %s", getName()))
+    return Err;
 
   ODBG(OLDT_Kernel) << llvm::format("SUCCESS: Kernel %s completed", getName());
   return Plugin::success();
@@ -905,13 +910,41 @@ struct ThunderbirdPluginTy final : public GenericPluginTy {
   const char *getName() const override { return GETNAME(TARGET_NAME); }
 };
 
+/// Check a libtbird_host status: an error with the ErrorCode closest to it,
+/// and the library's reason for the last %s of ErrMsg. TIMEOUT, EXEC_FAILED
+/// and DEVICE (a device-side failure, and on the mailbox transport any refusal
+/// the device makes) have no closer code than UNKNOWN.
 template <typename... ArgsTy>
 static Error Plugin::check(int32_t Code, const char *ErrMsg, ArgsTy... Args) {
-  if (Code == 0)
+  if (Code == TBIRD_SUCCESS)
     return Plugin::success();
 
-  return Plugin::error(ErrorCode::UNKNOWN, ErrMsg, Args...,
-                       std::to_string(Code).data());
+  ErrorCode OffloadErrCode;
+  switch (Code) {
+  case TBIRD_ERROR_INVALID_PARAM:
+  case TBIRD_ERROR_OUT_OF_RANGE:
+  case TBIRD_ERROR_FAILED_PRECONDITION:
+    OffloadErrCode = ErrorCode::INVALID_ARGUMENT;
+    break;
+  case TBIRD_ERROR_NOT_FOUND:
+    OffloadErrCode = ErrorCode::NOT_FOUND;
+    break;
+  case TBIRD_ERROR_NO_DEVICE_MEMORY:
+  case TBIRD_ERROR_NO_HOST_MEMORY:
+    OffloadErrCode = ErrorCode::OUT_OF_RESOURCES;
+    break;
+  case TBIRD_ERROR_IO:
+    OffloadErrCode = ErrorCode::HOST_IO;
+    break;
+  case TBIRD_ERROR_DEVICE_LOST:
+  case TBIRD_ERROR_PROTOCOL:
+    OffloadErrCode = ErrorCode::BACKEND_FAILURE;
+    break;
+  default:
+    OffloadErrCode = ErrorCode::UNKNOWN;
+  }
+
+  return Plugin::error(OffloadErrCode, ErrMsg, Args..., tbird_last_error());
 }
 
 } // namespace plugin
