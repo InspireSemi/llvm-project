@@ -15,7 +15,6 @@
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
-#include <glob.h>
 #include <string>
 #include <variant>
 #include <unordered_map>
@@ -76,47 +75,29 @@ struct ThunderbirdKernelTy;
 struct ThunderbirdDeviceTy;
 struct ThunderbirdPluginTy;
 
-/// The names of the devices, in OpenMP device order; each is passed to
-/// tbird_open. The first of these that applies:
-///
-///   - THUNDERBIRD_DEVICES=<name>,<name>,...: these devices, in this order.
-///     Empty names (",,", a trailing ",") are skipped.
-///   - THUNDERBIRD_DEVICE_PATH=<path>: that one device.
-///   - Otherwise every application mailbox of the host driver
-///     (tbird_offload.ko), which exposes one /dev/tbird<PCI>-<K> char device
-///     per mailbox.
+/// The names of the devices, in OpenMP device order, from
+/// THUNDERBIRD_DEVICES=<name>,<name>,...; each is passed to tbird_open
+/// (tcp:<host>:<port>). Empty names (",,", a trailing ",") are skipped.
+/// Without the variable there are no devices.
 ///
 /// Cached in a function-static so initImpl() in plugin and device share a
 /// consistent view across calls.
 static const std::vector<std::string> &getThunderbirdDevicePaths() {
   static std::vector<std::string> paths = []() {
     std::vector<std::string> p;
-    if (const char *list = getenv("THUNDERBIRD_DEVICES")) {
-      std::string names(list);
-      size_t start = 0;
-      while (start <= names.size()) {
-        size_t end = names.find(',', start);
-        if (end == std::string::npos)
-          end = names.size();
-        if (end > start)
-          p.emplace_back(names.substr(start, end - start));
-        start = end + 1;
-      }
+    const char *list = getenv("THUNDERBIRD_DEVICES");
+    if (!list)
       return p;
+    std::string names(list);
+    size_t start = 0;
+    while (start <= names.size()) {
+      size_t end = names.find(',', start);
+      if (end == std::string::npos)
+        end = names.size();
+      if (end > start)
+        p.emplace_back(names.substr(start, end - start));
+      start = end + 1;
     }
-    if (const char *override_path = getenv("THUNDERBIRD_DEVICE_PATH")) {
-      p.emplace_back(override_path);
-      return p;
-    }
-    glob_t g;
-    if (glob("/dev/tbird*-*", 0, nullptr, &g) == 0) {
-      for (size_t i = 0; i < g.gl_pathc; ++i)
-        p.emplace_back(g.gl_pathv[i]);
-    }
-    globfree(&g);
-    // glob() returns lexicographically-sorted output; for the current A0
-    // cap of 2 ("tbird*-0", "tbird*-1") this produces the right order.
-    // If K >= 10 ever ships, switch to numeric-suffix sort.
     return p;
   }();
   return paths;
@@ -866,7 +847,9 @@ struct ThunderbirdPluginTy final : public GenericPluginTy {
   /// Initialize the plugin and return the number of devices.
   Expected<int32_t> initImpl() override {
     const auto &paths = getThunderbirdDevicePaths();
-    ODBG(OLDT_Init) << llvm::format("Thunderbird plugin discovered %zu application mailbox device(s)", paths.size());
+    if (!getenv("THUNDERBIRD_DEVICES"))
+      ODBG(OLDT_Init) << "THUNDERBIRD_DEVICES is not set: no Thunderbird devices";
+    ODBG(OLDT_Init) << llvm::format("Thunderbird plugin found %zu device(s)", paths.size());
     return static_cast<int32_t>(paths.size());
   }
 
@@ -912,8 +895,8 @@ struct ThunderbirdPluginTy final : public GenericPluginTy {
 
 /// Check a libtbird_host status: an error with the ErrorCode closest to it,
 /// and the library's reason for the last %s of ErrMsg. TIMEOUT, EXEC_FAILED
-/// and DEVICE (a device-side failure, and on the mailbox transport any refusal
-/// the device makes) have no closer code than UNKNOWN.
+/// and DEVICE (a device-side failure no other status names) have no closer
+/// code than UNKNOWN.
 template <typename... ArgsTy>
 static Error Plugin::check(int32_t Code, const char *ErrMsg, ArgsTy... Args) {
   if (Code == TBIRD_SUCCESS)
